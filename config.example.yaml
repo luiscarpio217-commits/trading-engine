@@ -1,0 +1,90 @@
+# Day trading engine configuration.
+# Copy to config.yaml and adjust. Every key is optional; omitted keys keep
+# the defaults shown here. Broker credentials come from environment variables,
+# never from this file.
+
+engine:
+  tickers: [SPY, QQQ, AAPL, TSLA, NVDA]
+  scan_interval_seconds: 60        # strategy scan cadence
+  manage_interval_seconds: 10      # position/order management cadence
+  db_path: data/trading.db
+  csv_dir: data                    # trades.csv / signals.csv mirrors
+  log_level: INFO
+
+data:
+  intraday_interval: 5m            # yfinance interval for intraday bars (1m/2m/5m/15m)
+  intraday_lookback_days: 5
+  daily_lookback_days: 120
+  options_provider: yfinance       # yfinance | tradier (tradier adds greeks)
+  max_chain_expiries: 3            # how many expiries to pull per chain fetch
+  quote_cache_seconds: 10
+  intraday_cache_seconds: 30
+  daily_cache_seconds: 3600
+  chain_cache_seconds: 300
+
+filters:
+  market_hours_only: true          # only signal 9:30-16:00 ET, Mon-Fri
+  timezone: America/New_York
+  session_start: "09:30"
+  session_end: "16:00"
+  eod_flatten: true                # close everything before the bell (day trading)
+  eod_flatten_time: "15:55"
+  min_avg_daily_volume: 1000000    # skip illiquid underlyings (20-day avg shares/day)
+  earnings_blackout_days: 2        # no new trades within +/- N days of earnings
+
+strategies:
+  momentum_breakout:
+    enabled: true
+    breakout_lookback: 20          # bars defining resistance/support
+    volume_multiple: 1.5           # breakout bar volume vs 20-bar average (RVOL)
+    rsi_min: 50
+    rsi_max: 80                    # skip already-overbought breakouts
+    atr_stop_multiple: 1.5         # stop distance in ATRs
+    reward_risk: 2.0               # target = entry + RR * risk
+    allow_short: true              # mirror logic on breakdowns -> puts
+    cooldown_minutes: 30           # per symbol+strategy signal cooldown
+    min_dte: 1                     # recommended contract: nearest expiry >= this
+    target_delta: 0.40             # recommended contract delta (when greeks known)
+  options_flow:
+    enabled: true
+    max_dte: 14                    # only scan near-dated contracts
+    min_volume: 500                # contract volume floor
+    volume_oi_ratio: 2.0           # unusual = volume >= ratio * open interest
+    iv_multiple: 1.25              # and IV >= multiple * chain median IV
+    moneyness_pct: 0.10            # strike within 10% of spot
+    dominance_ratio: 1.5           # call premium vs put premium (or inverse) to pick side
+    stop_pct: 0.01                 # underlying stop distance
+    reward_risk: 2.0
+    cooldown_minutes: 60
+
+risk:
+  max_risk_per_trade_pct: 0.01     # risk 1% of equity per trade (default 1-2%)
+  max_daily_loss_pct: 0.03         # auto-shutoff: halt new trades at -3% on the day
+  sizing_method: fixed_fractional  # fixed_fractional | kelly
+  kelly_multiplier: 0.5            # half-Kelly
+  kelly_cap: 0.25                  # hard cap on Kelly fraction
+  kelly_min_trades: 20             # fall back to fixed fractional until N closed trades
+  max_open_positions: 5
+  max_position_notional_pct: 0.20  # single position notional cap vs equity
+  premium_stop_pct: 0.50           # close option position if premium halves
+  flatten_on_shutoff: true         # also close open positions when daily loss trips
+
+execution:
+  broker: paper                    # paper | alpaca | tradier
+  trade_options: true              # place option orders when the signal recommends a contract
+  order_type: market               # market | limit
+  limit_offset_bps: 10             # for limit entries: pay up to entry + 10bps (buys)
+  paper:
+    starting_cash: 100000
+    slippage_bps: 5
+  alpaca:
+    paper: true                    # paper-api.alpaca.markets
+    # credentials: export ALPACA_API_KEY_ID=... ALPACA_API_SECRET_KEY=...
+  tradier:
+    sandbox: true                  # sandbox.tradier.com
+    # credentials: export TRADIER_ACCESS_TOKEN=... TRADIER_ACCOUNT_ID=...
+
+web:
+  enabled: false                   # FastAPI dashboard alongside the engine loop
+  host: 127.0.0.1
+  port: 8000
