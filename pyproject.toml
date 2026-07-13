@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "day-trading-engine"
+version = "0.1.0"
+description = "Day trading strategy engine: market data, signal generation, options flow, execution, risk management, and dashboards"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "yfinance>=0.2.40",
+    "requests>=2.31",
+    "PyYAML>=6.0",
+    "APScheduler>=3.10",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+web = ["fastapi>=0.110", "uvicorn>=0.29"]
+dev = ["pytest>=8.0", "fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27"]
+
+[project.scripts]
+trading-engine = "trading_engine.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["trading_engine*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

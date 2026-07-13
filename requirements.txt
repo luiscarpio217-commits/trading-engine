@@ -1,0 +1,15 @@
+# Runtime dependencies
+pandas>=2.0
+numpy>=1.24
+yfinance>=0.2.40
+requests>=2.31
+PyYAML>=6.0
+APScheduler>=3.10
+rich>=13.0
+
+# Optional web dashboard
+fastapi>=0.110
+uvicorn>=0.29
+
+# Development / tests
+pytest>=8.0

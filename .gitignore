@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+.env
+data/
+*.db
+*.sqlite3
+*.csv
+!tests/fixtures/*.csv
+config.yaml
