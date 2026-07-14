@@ -8,7 +8,8 @@ dist/
 .venv/
 venv/
 .env
-data/
+# journal output dir at repo root only — NOT trading_engine/data/ (source package)
+/data/
 *.db
 *.sqlite3
 *.csv
