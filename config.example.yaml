@@ -49,6 +49,7 @@ strategies:
     enabled: true
     max_dte: 14                    # only scan near-dated contracts
     min_volume: 500                # contract volume floor
+    min_premium: 0.10              # skip sub-dime lottery tickets
     volume_oi_ratio: 2.0           # unusual = volume >= ratio * open interest
     iv_multiple: 1.25              # and IV >= multiple * chain median IV
     moneyness_pct: 0.10            # strike within 10% of spot
@@ -67,6 +68,8 @@ risk:
   max_open_positions: 5
   max_position_notional_pct: 0.20  # single position notional cap vs equity
   premium_stop_pct: 0.50           # close option position if premium halves
+  min_option_premium: 0.10         # never buy contracts cheaper than this
+  max_option_contracts: 25         # hard cap on contracts per trade
   flatten_on_shutoff: true         # also close open positions when daily loss trips
 
 execution:

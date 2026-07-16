@@ -75,6 +75,7 @@ class OptionsFlowSettings:
     enabled: bool = True
     max_dte: int = 14
     min_volume: int = 500
+    min_premium: float = 0.10        # ignore sub-dime lottery tickets in the scan
     volume_oi_ratio: float = 2.0
     iv_multiple: float = 1.25
     moneyness_pct: float = 0.10
@@ -101,6 +102,8 @@ class RiskSettings:
     max_open_positions: int = 5
     max_position_notional_pct: float = 0.20    # cap on position notional vs equity
     premium_stop_pct: float = 0.50             # option premium stop (fraction of entry premium)
+    min_option_premium: float = 0.10           # never trade contracts cheaper than this
+    max_option_contracts: int = 25             # hard cap on contracts per trade
     flatten_on_shutoff: bool = True
 
 

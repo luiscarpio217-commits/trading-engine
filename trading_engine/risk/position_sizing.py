@@ -88,12 +88,21 @@ class PositionSizer:
             if premium is None or premium <= 0:
                 return SizingResult(0, risk_dollars, risk_pct, method, 0.0,
                                     ["no usable option premium; cannot size"])
+            if premium < self.s.min_option_premium:
+                return SizingResult(0, risk_dollars, risk_pct, method, 0.0,
+                                    [f"premium ${premium:.2f} below minimum "
+                                     f"${self.s.min_option_premium:.2f}; cheap contracts "
+                                     f"produce oversized, untradeable quantities"])
             per_contract_risk = premium * 100.0  # long option: full premium at risk
             qty = math.floor(risk_dollars / per_contract_risk)
-            qty = min(qty, math.floor(max_notional / per_contract_risk)) if per_contract_risk else 0
+            qty = min(qty, math.floor(max_notional / per_contract_risk))
+            if qty > self.s.max_option_contracts:
+                notes.append(f"capped at max_option_contracts "
+                             f"({self.s.max_option_contracts}, was {qty})")
+                qty = self.s.max_option_contracts
             if qty <= 0:
                 notes.append(f"premium ${premium:.2f} exceeds risk budget ${risk_dollars:.2f}")
-            notional = qty * premium * 100.0
+            notional = max(qty, 0) * premium * 100.0
             return SizingResult(max(qty, 0), risk_dollars, risk_pct, method, notional, notes)
 
         per_share_risk = signal.risk_per_share

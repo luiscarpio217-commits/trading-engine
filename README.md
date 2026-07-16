@@ -92,7 +92,10 @@ rate-limited by a cooldown.
 - **Per-trade risk**: default 1% of equity (`max_risk_per_trade_pct`).
   Equity size = budget / (entry − stop); option size = budget / (premium × 100)
   — long options risk the full premium. Both capped by
-  `max_position_notional_pct`.
+  `max_position_notional_pct`, and option orders additionally by
+  `min_option_premium` (default $0.10 — no sub-dime lottery tickets) and
+  `max_option_contracts` (default 25), so tiny premiums can never produce
+  enormous quantities.
 - **Kelly criterion** (optional, `sizing_method: kelly`): half-Kelly on
   realized win rate / payoff from the journal, hard-capped, with automatic
   fall-back to fixed fractional until ≥ 20 closed trades exist.
@@ -118,9 +121,12 @@ order polling with partial-fill sync, positions, and account balances.
 Tradier also serves options chains **with greeks** — set
 `data.options_provider: tradier` to use them for contract selection.
 
-Paper-mode option marks are estimated from the underlying move via delta
-(no live option quotes without a broker), so option P&L in paper mode is an
-approximation — treat it accordingly when reviewing the journal.
+Paper-mode option marks come from a Black-Scholes model **calibrated to the
+entry fill** (implied vol backed out from the actual entry premium, then held
+constant): the mark equals the entry premium at entry, converges to intrinsic
+value at expiry (0DTE-safe), and extrinsic value stays bounded — see
+`trading_engine/data/pricing.py`. Still an approximation; treat paper option
+P&L accordingly when reviewing the journal. Live brokers use real quotes.
 
 ## Journal & review
 
@@ -147,7 +153,7 @@ trading_engine/
 ├── execution/               # paper / alpaca / tradier + order manager
 ├── storage/trade_log.py     # SQLite + CSV journal
 └── dashboard/               # rich terminal UI, FastAPI web UI
-tests/                       # 78 offline tests, synthetic data only
+tests/                       # 102 offline tests, synthetic data only
 ```
 
 Indicators are implemented natively on pandas/numpy (Wilder smoothing for

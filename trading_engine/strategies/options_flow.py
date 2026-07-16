@@ -13,6 +13,12 @@ Unusual premium (volume x mid x 100) is aggregated per side; when one side
 out-weighs the other by `dominance_ratio`, that side sets the direction and
 the highest-premium contract becomes both the recommended contract and the
 price magnet for the target.
+
+Direction semantics: `direction=SHORT` is a **bearish thesis**, expressed by
+BUYING puts (long premium, risk limited to premium paid). Put-dominated flow
+-> SHORT -> buy puts; call-dominated flow -> LONG -> buy calls. This engine
+never sells options short (no sell_to_open anywhere in the execution layer),
+so a journal row like "options_flow / short / put" means *long puts*.
 """
 
 from __future__ import annotations
@@ -108,6 +114,7 @@ class OptionsFlowStrategy(Strategy):
             (df["dte"] >= 0)
             & (df["dte"] <= self.s.max_dte)
             & (df["volume"] >= self.s.min_volume)
+            & (df["mid"].fillna(0.0) >= self.s.min_premium)
             & (df["open_interest"] > 0)
             & (df["volume"] >= self.s.volume_oi_ratio * df["open_interest"])
             & ((df["strike"] / spot - 1.0).abs() <= self.s.moneyness_pct)

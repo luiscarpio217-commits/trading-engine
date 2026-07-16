@@ -44,6 +44,10 @@ _PAGE = """<!DOCTYPE html>
 const fmt = (v, d=2) => v == null ? "" : Number(v).toLocaleString(undefined,
   {minimumFractionDigits: d, maximumFractionDigits: d});
 const pnlCell = v => `<td class="${v >= 0 ? 'pos' : 'neg'}">${fmt(v)}</td>`;
+// options are always bought: bearish thesis == long puts, never short premium
+const sideLabel = (instrument, direction) => instrument === "option"
+  ? (direction === "long" ? "long call" : "long put")
+  : direction;
 function fillTable(id, headers, rows) {
   const el = document.getElementById(id);
   el.innerHTML = "<tr>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr>" +
@@ -60,7 +64,8 @@ async function refresh() {
     document.getElementById("cards").innerHTML = [
       ["Equity", "$" + fmt(acct.equity)],
       ["Cash", "$" + fmt(acct.cash)],
-      ["Day P&L", fmt(day.realized_pnl)],
+      ["Day P&L (realized)", fmt(day.realized_pnl)],
+      ["Day P&L (total)", day.total_pnl == null ? "n/a" : fmt(day.total_pnl)],
       ["Loss Limit", "$" + fmt(day.max_daily_loss)],
       ["Win Rate", fmt((stats.win_rate || 0) * 100, 1) + "%"],
       ["Total P&L", fmt(stats.total_pnl)],
@@ -69,7 +74,8 @@ async function refresh() {
                       `<div class="value">${v}</div></div>`).join("");
     fillTable("positions",
       ["Symbol", "Dir", "Strategy", "Qty", "Entry", "Mark", "Stop", "Target", "Unreal P&L"],
-      (s.positions || []).map(p => `<tr><td>${p.symbol}</td><td>${p.direction}</td>` +
+      (s.positions || []).map(p => `<tr><td>${p.symbol}</td>` +
+        `<td>${p.side || sideLabel(p.instrument, p.direction)}</td>` +
         `<td>${p.strategy}</td><td>${p.qty}</td><td>${fmt(p.avg_entry)}</td>` +
         `<td>${fmt(p.mark)}</td><td>${fmt(p.stop_loss)}</td><td>${fmt(p.target)}</td>` +
         pnlCell(p.unrealized_pnl) + "</tr>"));
@@ -83,7 +89,8 @@ async function refresh() {
     fillTable("trades",
       ["Closed", "Symbol", "Strategy", "Dir", "Qty", "Entry", "Exit", "P&L", "Reason"],
       (s.trades || []).map(t => `<tr><td>${(t.exit_time || "").slice(11, 19)}</td>` +
-        `<td>${t.underlying || t.symbol}</td><td>${t.strategy}</td><td>${t.direction}</td>` +
+        `<td>${t.underlying || t.symbol}</td><td>${t.strategy}</td>` +
+        `<td>${sideLabel(t.instrument, t.direction)}</td>` +
         `<td>${t.qty}</td><td>${fmt(t.entry_price)}</td><td>${fmt(t.exit_price)}</td>` +
         pnlCell(t.pnl) + `<td>${t.exit_reason}</td></tr>`));
   } catch (e) { document.getElementById("meta").textContent = "engine unreachable: " + e; }

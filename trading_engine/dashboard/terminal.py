@@ -12,6 +12,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from ..models import position_side_label
+
 
 def _pnl_text(value: float, suffix: str = "") -> Text:
     style = "green" if value > 0 else "red" if value < 0 else "white"
@@ -27,9 +29,13 @@ def _header(status: dict) -> Panel:
     line1 = (f"[bold]Day Trading Engine[/bold]  broker=[cyan]{status.get('broker')}[/cyan]  "
              f"market {market}{halt}")
     realized = day.get("realized_pnl") or 0.0
+    total = day.get("total_pnl")
+    total_str = (f"{'[green]' if total >= 0 else '[red]'}{total:+,.2f}[/]"
+                 if total is not None else "n/a")
     line2 = (f"equity [bold]${account.get('equity', 0):,.2f}[/bold]  "
              f"cash ${account.get('cash', 0):,.2f}  "
-             f"day P&L {'[green]' if realized >= 0 else '[red]'}{realized:+,.2f}[/]  "
+             f"day P&L realized {'[green]' if realized >= 0 else '[red]'}{realized:+,.2f}[/] "
+             f"/ total {total_str}  "
              f"daily loss limit ${day.get('max_daily_loss', 0):,.2f}  "
              f"tickers: {', '.join(status.get('tickers', []))}")
     return Panel(Group(Text.from_markup(line1), Text.from_markup(line2)), height=4)
@@ -41,7 +47,10 @@ def _positions_table(status: dict) -> Table:
         t.add_column(col, justify="right" if col not in ("Symbol", "Dir", "Strat") else "left")
     for p in status.get("positions", []):
         t.add_row(
-            p["symbol"], p["direction"], p["strategy"].replace("_", " "),
+            p["symbol"],
+            p.get("side") or position_side_label(p.get("instrument", "equity"),
+                                                 p.get("direction", "long")),
+            p["strategy"].replace("_", " "),
             f"{p['qty']:g}", f"{p['avg_entry']:,.2f}", f"{p['mark']:,.2f}",
             f"{p['stop_loss']:,.2f}", f"{p['target']:,.2f}",
             _pnl_text(p["unrealized_pnl"]),
@@ -74,7 +83,9 @@ def _trades_table(status: dict) -> Table:
     for tr in status.get("trades", [])[:8]:
         t.add_row(
             str(tr.get("exit_time", ""))[11:19], tr.get("underlying") or tr.get("symbol", ""),
-            str(tr.get("strategy", "")).replace("_", " "), tr.get("direction", ""),
+            str(tr.get("strategy", "")).replace("_", " "),
+            position_side_label(tr.get("instrument", "equity"),
+                                tr.get("direction", "long")),
             f"{tr.get('qty') or 0:g}", f"{tr.get('entry_price') or 0:,.2f}",
             f"{tr.get('exit_price') or 0:,.2f}", _pnl_text(tr.get("pnl") or 0.0),
             tr.get("exit_reason", ""),

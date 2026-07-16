@@ -18,7 +18,13 @@ def new_id(prefix: str) -> str:
 
 
 class Direction(str, Enum):
-    """Directional thesis of a signal (long = bullish, short = bearish)."""
+    """Directional thesis of a signal (long = bullish, short = bearish).
+
+    This is the *thesis*, not the sign of the units held. Option positions
+    are always LONG PREMIUM (bought): a SHORT thesis buys puts; the engine
+    never sells options short. Only equity positions can hold short units
+    (sell_short/buy_to_cover). Use `position_side_label()` when displaying.
+    """
 
     LONG = "long"
     SHORT = "short"
@@ -72,6 +78,20 @@ class OrderStatus(str, Enum):
     @property
     def is_terminal(self) -> bool:
         return self in (OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED)
+
+
+def position_side_label(instrument: "Instrument | str", direction: "Direction | str") -> str:
+    """Human-readable side for journals/dashboards.
+
+    Options are always bought, so a bearish option position reads
+    'long put' — never 'short', which misleads readers into premium-short
+    P&L expectations (premium up would look like a loss when it is a gain).
+    """
+    inst = instrument.value if isinstance(instrument, Instrument) else str(instrument)
+    dirn = direction.value if isinstance(direction, Direction) else str(direction)
+    if inst == Instrument.OPTION.value:
+        return "long call" if dirn == Direction.LONG.value else "long put"
+    return "long" if dirn == Direction.LONG.value else "short"
 
 
 def occ_symbol(underlying: str, expiry: date, option_type: OptionType, strike: float) -> str:
