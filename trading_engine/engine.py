@@ -19,11 +19,12 @@ from .config import Config
 from .data.indicators import compute_indicators
 from .data.market_data import YFinanceMarketData
 from .data.options_data import TradierOptionsData, YFinanceOptionsData
+from .data.pricing import OptionMarkModel
 from .execution.base import Broker
 from .execution.order_manager import OrderManager
 from .execution.paper import PaperBroker
 from .filters import SignalFilters
-from .models import Instrument, OptionType, Order, Signal, TradeRecord
+from .models import Instrument, Order, Signal, TradeRecord, position_side_label
 from .risk.manager import RiskManager
 from .risk.position_sizing import PositionSizer
 from .storage.trade_log import TradeLog
@@ -81,7 +82,7 @@ class TradingEngine:
             self.strategies.append(OptionsFlowStrategy(cfg.strategies.options_flow))
 
         self._cooldowns: dict[tuple[str, str], datetime] = {}
-        self._option_meta: dict[str, dict] = {}   # occ -> entry_spot/delta/type for mark estimation
+        self._option_meta: dict[str, OptionMarkModel] = {}  # occ -> calibrated mark model
         self._flattened_session = None
         self._halt_flattened = False
         self._last_equity_log = 0.0
@@ -198,6 +199,11 @@ class TradingEngine:
         if signal.contract is not None:
             mid = signal.contract.mid
             premium = mid if mid == mid and mid > 0 else None
+        min_premium = self.config.risk.min_option_premium
+        if premium is not None and premium < min_premium:
+            log.info("signal %s: contract premium $%.2f below minimum $%.2f, "
+                     "expressing as equity instead", signal.id, premium, min_premium)
+            premium = None
         if not (self.config.execution.trade_options and premium):
             signal.instrument = Instrument.EQUITY  # express as shares instead
 
@@ -218,14 +224,15 @@ class TradingEngine:
         if order.status.value == "rejected":
             self.trade_log.set_signal_status(signal.id, "rejected_by_broker")
             return
-        if (signal.instrument is Instrument.OPTION and signal.contract is not None):
-            self._option_meta[signal.contract.occ] = {
-                "entry_spot": signal.entry_price,
-                "entry_premium": premium,
-                "delta": signal.contract.delta if signal.contract.delta is not None
-                else (0.5 if signal.option_type is OptionType.CALL else -0.5),
-                "type": signal.option_type,
-            }
+        if signal.instrument is Instrument.OPTION and signal.contract is not None:
+            contract = signal.contract
+            self._option_meta[contract.occ] = OptionMarkModel.calibrate(
+                option_type=signal.option_type,
+                strike=contract.strike,
+                expiry=contract.expiry,
+                entry_spot=signal.entry_price,
+                entry_premium=premium,
+            )
         self.trade_log.set_signal_status(
             signal.id, f"executed:{sizing.qty}@{sizing.method}:{sizing.risk_pct:.3%}")
         log.info("executed signal %s: qty %d, risk $%.2f (%.2f%% %s)", signal.id,
@@ -315,29 +322,34 @@ class TradingEngine:
         return price
 
     def _mark_option(self, occ: str, spot: Optional[float]) -> Optional[float]:
-        """Real quote when the broker has one, else a delta approximation."""
-        quote = None
-        try:
-            quote = self.broker.get_quote(occ)
-        except Exception:
-            quote = None
-        meta = self._option_meta.get(occ)
-        if isinstance(self.broker, PaperBroker) and meta and spot:
-            # Paper marks are self-set; prefer the live estimate from spot moves.
-            est = meta["entry_premium"] + meta["delta"] * (spot - meta["entry_spot"])
-            return round(max(est, 0.01), 4)
-        if quote:
-            return quote
-        if meta and spot:
-            est = meta["entry_premium"] + meta["delta"] * (spot - meta["entry_spot"])
-            return round(max(est, 0.01), 4)
+        """Real broker quote when available, else the entry-calibrated model.
+
+        Paper marks are self-set (get_quote would just echo our last mark),
+        so paper mode always uses the model: Black-Scholes at the implied vol
+        backed out from the entry fill, converging to intrinsic at expiry and
+        bounded — see data/pricing.py.
+        """
+        if not isinstance(self.broker, PaperBroker):
+            try:
+                quote = self.broker.get_quote(occ)
+            except Exception:
+                quote = None
+            if quote:
+                return quote
+        model = self._option_meta.get(occ)
+        if model is not None and spot:
+            return model.mark(spot)
+        if isinstance(self.broker, PaperBroker):
+            return self.broker.get_quote(occ)  # last known mark
         return None
 
     # -- status / loop -------------------------------------------------------------
 
     def get_status(self) -> dict:
+        equity_val = None
         try:
             account = self.broker.get_account()
+            equity_val = account.equity
             account_d = {"equity": round(account.equity, 2),
                          "cash": round(account.cash, 2),
                          "buying_power": round(account.buying_power, 2)}
@@ -349,6 +361,7 @@ class TradingEngine:
             positions.append({
                 "symbol": p.symbol, "underlying": p.underlying,
                 "instrument": p.instrument.value, "direction": p.direction.value,
+                "side": position_side_label(p.instrument, p.direction),
                 "strategy": p.strategy, "qty": p.qty,
                 "avg_entry": round(p.avg_entry, 4), "mark": round(p.mark, 4),
                 "underlying_mark": round(p.underlying_mark, 4),
@@ -373,6 +386,9 @@ class TradingEngine:
                 "session": day.session.isoformat() if day else None,
                 "start_equity": round(day.start_equity, 2) if day else None,
                 "realized_pnl": round(day.realized_pnl, 2) if day else 0.0,
+                # total = realized + unrealized, from mark-to-market equity
+                "total_pnl": (round(equity_val - day.start_equity, 2)
+                              if day and equity_val is not None else None),
                 "max_daily_loss": round(self.risk.max_daily_loss(), 2),
             },
             "positions": positions,

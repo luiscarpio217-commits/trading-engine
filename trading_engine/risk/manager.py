@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from ..config import RiskSettings
@@ -89,8 +89,12 @@ class RiskManager:
         if self._day is None or self._day.halted:
             return
         self._day.halted = True
-        self._day.halt_reason = reason
-        log.warning("risk: TRADING HALTED - %s", reason)
+        # Timestamp the trigger: realized P&L keeps accruing after the halt
+        # (the shutoff flatten still closes trades), so the reason must read
+        # as a snapshot, not the current total.
+        stamp = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+        self._day.halt_reason = f"{reason} (tripped {stamp})"
+        log.warning("risk: TRADING HALTED - %s", self._day.halt_reason)
 
     # -- gates -------------------------------------------------------------------
 
