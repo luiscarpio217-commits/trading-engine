@@ -1,0 +1,34 @@
+# systemd unit for the day trading engine (paper mode) with web dashboard.
+# Installed by deploy/setup.sh to /etc/systemd/system/trading-engine.service.
+#
+# Credentials and settings come from /etc/trading-engine/env — the service
+# will refuse to start (fail closed) if DASHBOARD_USERNAME/DASHBOARD_PASSWORD
+# are unset while binding a non-loopback host.
+
+[Unit]
+Description=Day trading engine (paper) with web dashboard
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=trading
+Group=trading
+WorkingDirectory=/opt/trading-engine
+EnvironmentFile=/etc/trading-engine/env
+ExecStart=/opt/trading-engine/.venv/bin/python -m trading_engine --config /opt/trading-engine/config.yaml web
+
+# restart on crash and come back after reboot (enabled unit)
+Restart=always
+RestartSec=5
+
+# hardening: read-only filesystem except the journal directory
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trading-engine/data
+
+[Install]
+WantedBy=multi-user.target

@@ -7,11 +7,35 @@ Endpoints:
     GET /api/positions open positions
     GET /api/trades    recent closed trades
     GET /api/stats     aggregate performance
+
+Authentication: HTTP Basic over every route (page, API, /docs). Credentials
+come from the DASHBOARD_USERNAME / DASHBOARD_PASSWORD environment variables.
+When they are set, every request must authenticate. Binding to anything other
+than loopback WITHOUT credentials is refused outright (fail closed) — an
+internet-reachable dashboard must never run open. Plain HTTP Basic is not
+encrypted in transit; use a strong password and consider a TLS reverse proxy.
 """
 
 from __future__ import annotations
 
-from typing import Callable
+import base64
+import logging
+import os
+import secrets
+from typing import Callable, Optional
+
+log = logging.getLogger(__name__)
+
+USERNAME_ENV = "DASHBOARD_USERNAME"
+PASSWORD_ENV = "DASHBOARD_PASSWORD"
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def resolve_credentials() -> tuple[Optional[str], Optional[str]]:
+    """(username, password) from the environment; blank counts as unset."""
+    user = os.environ.get(USERNAME_ENV, "").strip() or None
+    password = os.environ.get(PASSWORD_ENV, "").strip() or None
+    return user, password
 
 _PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Day Trading Engine</title>
@@ -100,12 +124,44 @@ refresh(); setInterval(refresh, 5000);
 </body></html>"""
 
 
-def create_app(status_provider: Callable[[], dict]):
-    """Build the FastAPI app around any `() -> status dict` provider."""
-    from fastapi import FastAPI
+def create_app(status_provider: Callable[[], dict],
+               username: Optional[str] = None,
+               password: Optional[str] = None):
+    """Build the FastAPI app around any `() -> status dict` provider.
+
+    When `username` and `password` are both given, EVERY route (page, API,
+    docs, openapi) requires HTTP Basic auth with those credentials.
+    """
+    from fastapi import FastAPI, Request, Response
     from fastapi.responses import HTMLResponse
 
     app = FastAPI(title="Day Trading Engine", docs_url="/docs")
+
+    if username and password:
+        expected_user = username.encode()
+        expected_pass = password.encode()
+
+        @app.middleware("http")
+        async def require_basic_auth(request: Request, call_next):
+            header = request.headers.get("authorization", "")
+            authorized = False
+            if header[:6].lower() == "basic ":
+                try:
+                    decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+                    got_user, _, got_pass = decoded.partition(":")
+                    # compare both unconditionally: constant-time, no short-circuit
+                    user_ok = secrets.compare_digest(got_user.encode(), expected_user)
+                    pass_ok = secrets.compare_digest(got_pass.encode(), expected_pass)
+                    authorized = user_ok and pass_ok
+                except Exception:
+                    authorized = False
+            if not authorized:
+                return Response(
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="trading-engine"'},
+                    content="authentication required",
+                )
+            return await call_next(request)
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
@@ -135,11 +191,31 @@ def create_app(status_provider: Callable[[], dict]):
 
 
 def serve(status_provider: Callable[[], dict], host: str, port: int,
-          in_thread: bool = False):
-    """Run uvicorn; optionally on a daemon thread next to the engine loop."""
+          in_thread: bool = False,
+          username: Optional[str] = None, password: Optional[str] = None):
+    """Run uvicorn; optionally on a daemon thread next to the engine loop.
+
+    Credentials default to DASHBOARD_USERNAME / DASHBOARD_PASSWORD from the
+    environment. Binding a non-loopback host without credentials raises —
+    fail closed rather than exposing an open dashboard to the internet.
+    """
     import uvicorn
 
-    app = create_app(status_provider)
+    if username is None and password is None:
+        username, password = resolve_credentials()
+    if not (username and password):
+        if host not in _LOOPBACK_HOSTS:
+            raise RuntimeError(
+                f"refusing to bind {host}:{port} without authentication - set the "
+                f"{USERNAME_ENV} and {PASSWORD_ENV} environment variables "
+                f"(dashboard would be reachable by anyone)")
+        log.warning("dashboard auth disabled (%s/%s not set); allowed on "
+                    "loopback %s only", USERNAME_ENV, PASSWORD_ENV, host)
+        username = password = None
+    else:
+        log.info("dashboard basic auth enabled for user %r", username)
+
+    app = create_app(status_provider, username, password)
     config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(config)
     if in_thread:

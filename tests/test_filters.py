@@ -2,6 +2,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pytest
 
 from trading_engine.config import FilterSettings
 from trading_engine.filters import EarningsFilter, MarketHoursFilter, SignalFilters, VolumeFilter
@@ -56,6 +57,40 @@ def test_earnings_blackout():
     assert not f.passes("AAPL", today)        # earnings tomorrow -> blocked
     assert f.passes("MSFT", today)            # far away -> fine
     assert f.passes("UNKNOWN", today)         # no data -> no blackout
+
+
+def test_market_hours_on_utc_server(monkeypatch):
+    """A VPS whose local clock is UTC must still key sessions off US/Eastern."""
+    import time as _time
+
+    monkeypatch.setenv("TZ", "UTC")
+    _time.tzset()
+    try:
+        f = MarketHoursFilter(FilterSettings())
+        utc = ZoneInfo("UTC")
+        # summer (EDT, UTC-4): 13:30 UTC == 09:30 ET open, 20:00 UTC == 16:00 ET closed
+        assert f.is_open(datetime(2026, 7, 14, 13, 30, tzinfo=utc))
+        assert not f.is_open(datetime(2026, 7, 14, 13, 29, tzinfo=utc))
+        assert not f.is_open(datetime(2026, 7, 14, 20, 0, tzinfo=utc))
+        # winter (EST, UTC-5): open shifts to 14:30 UTC — DST handled
+        assert f.is_open(datetime(2026, 1, 13, 14, 30, tzinfo=utc))
+        assert not f.is_open(datetime(2026, 1, 13, 14, 29, tzinfo=utc))
+        # naive datetimes are interpreted as UTC, not server-local
+        assert f.is_open(datetime(2026, 7, 14, 14, 0))
+        # session date rolls at ET midnight, not UTC midnight:
+        # 01:00 UTC on the 15th is still 21:00 ET on the 14th
+        assert f.session_date(datetime(2026, 7, 15, 1, 0, tzinfo=utc)) == date(2026, 7, 14)
+        # EOD flatten window in UTC terms: 19:56 UTC == 15:56 ET
+        assert f.is_flatten_window(datetime(2026, 7, 14, 19, 56, tzinfo=utc))
+    finally:
+        monkeypatch.delenv("TZ", raising=False)
+        _time.tzset()
+
+
+def test_missing_tzdata_gives_actionable_error():
+    settings = FilterSettings(timezone="Not/AZone")
+    with pytest.raises(RuntimeError, match="tzdata"):
+        MarketHoursFilter(settings)
 
 
 def test_signal_filters_combined():

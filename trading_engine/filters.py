@@ -17,13 +17,25 @@ log = logging.getLogger(__name__)
 class MarketHoursFilter:
     """Regular US equity session: 9:30-16:00 ET, Monday-Friday.
 
+    All comparisons convert timezone-aware "now" into the exchange timezone,
+    so the host clock can be UTC (typical VPS) or anything else — session
+    boundaries and session dates always key off US/Eastern, including DST.
+    Naive datetimes are interpreted as UTC.
+
     Exchange holidays are not modeled; on a holiday the data layer simply
     produces no fresh bars, so no signals fire anyway.
     """
 
     def __init__(self, settings: FilterSettings) -> None:
         self._settings = settings
-        self._tz = ZoneInfo(settings.timezone)
+        try:
+            self._tz = ZoneInfo(settings.timezone)
+        except Exception as exc:  # ZoneInfoNotFoundError on hosts without tzdata
+            raise RuntimeError(
+                f"timezone database entry '{settings.timezone}' not found - "
+                f"install the OS tzdata package (Ubuntu/Debian: "
+                f"'apt install tzdata') so market hours resolve correctly"
+            ) from exc
 
     def now_local(self, now: Optional[datetime] = None) -> datetime:
         now = now or datetime.now(timezone.utc)
