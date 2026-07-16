@@ -1,0 +1,18 @@
+# Server configuration for 24/7 paper trading on a VPS.
+# setup.sh copies this to /opt/trading-engine/config.yaml on first install
+# (it never overwrites an existing config.yaml). All other settings keep the
+# defaults documented in config.example.yaml.
+
+engine:
+  tickers: [SPY, QQQ, AAPL, TSLA, NVDA]
+  # absolute paths so the systemd sandbox (ReadWritePaths) matches exactly
+  db_path: /opt/trading-engine/data/trading.db
+  csv_dir: /opt/trading-engine/data
+  log_level: INFO
+
+execution:
+  broker: paper            # paper only - no broker keys on this box
+
+web:
+  host: 0.0.0.0            # reachable from the internet -> auth is mandatory
+  port: 8000

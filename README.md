@@ -65,6 +65,14 @@ Everything defaults to the **built-in paper broker** with $100k — no
 credentials needed. Copy `config.example.yaml` to `config.yaml`, adjust, and
 pass `--config config.yaml`.
 
+**Run it 24/7 on a server**: `deploy/` has a systemd unit, a one-shot
+`setup.sh`, and a step-by-step [deploy/README.md](deploy/README.md) for a
+fresh Ubuntu VPS (written for DigitalOcean's browser console). The web
+dashboard requires HTTP Basic auth via `DASHBOARD_USERNAME` /
+`DASHBOARD_PASSWORD` and **refuses to bind non-loopback hosts without
+credentials**; `web.host`/`web.port` are set in `config.yaml`
+(`127.0.0.1:8000` default locally, `0.0.0.0` on the server).
+
 ## Strategies
 
 **Momentum breakout** (`momentum_breakout`) — long when the current bar makes
@@ -153,7 +161,7 @@ trading_engine/
 ├── execution/               # paper / alpaca / tradier + order manager
 ├── storage/trade_log.py     # SQLite + CSV journal
 └── dashboard/               # rich terminal UI, FastAPI web UI
-tests/                       # 102 offline tests, synthetic data only
+tests/                       # 112 offline tests, synthetic data only
 ```
 
 Indicators are implemented natively on pandas/numpy (Wilder smoothing for
