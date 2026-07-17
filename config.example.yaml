@@ -45,6 +45,14 @@ strategies:
     cooldown_minutes: 30           # per symbol+strategy signal cooldown
     min_dte: 1                     # recommended contract: nearest expiry >= this
     target_delta: 0.40             # recommended contract delta (when greeks known)
+    # Premium-based profit protection for option positions (off by default).
+    # Enable either or both; whichever triggers first closes the position.
+    # Journal exit reasons: "take_profit" / "trailing_lock".
+    # profit_protection:
+    #   take_profit_pct: 75        # close at +75% premium gain
+    #   trailing:
+    #     arm_pct: 50              # once up 50%, start tracking the peak mark...
+    #     giveback_pct: 30         # ...and close if it retraces 30% off that peak
   options_flow:
     enabled: true
     max_dte: 14                    # only scan near-dated contracts
@@ -57,6 +65,13 @@ strategies:
     stop_pct: 0.01                 # underlying stop distance
     reward_risk: 2.0
     cooldown_minutes: 60
+    # Same premium profit protection as momentum_breakout, independently
+    # configurable per strategy (suggested values, left disabled):
+    # profit_protection:
+    #   take_profit_pct: 75
+    #   trailing:
+    #     arm_pct: 50
+    #     giveback_pct: 30
 
 risk:
   max_risk_per_trade_pct: 0.01     # risk 1% of equity per trade (default 1-2%)

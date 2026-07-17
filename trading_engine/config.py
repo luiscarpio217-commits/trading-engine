@@ -56,6 +56,37 @@ class FilterSettings:
 
 
 @dataclass
+class TrailingSettings:
+    """Trailing premium lock: arm after a gain, close on a retrace off the peak.
+
+    Enabled only when BOTH values are set. Percentages are of entry premium
+    (arm) and of the peak mark (giveback): arm_pct=50, giveback_pct=30 means
+    "once the position is up 50%, close if the mark drops 30% from its high".
+    """
+
+    arm_pct: Optional[float] = None
+    giveback_pct: Optional[float] = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.arm_pct is not None and self.giveback_pct is not None
+
+
+@dataclass
+class ProfitProtectionSettings:
+    """Premium-based profit exits for option positions. Both off by default.
+
+    take_profit_pct: close when the mark reaches entry premium * (1 + pct/100).
+    trailing: see TrailingSettings. If both are configured, whichever
+    condition triggers first closes the position ("take_profit" vs
+    "trailing_lock" exit reasons in the journal).
+    """
+
+    take_profit_pct: Optional[float] = None
+    trailing: TrailingSettings = field(default_factory=TrailingSettings)
+
+
+@dataclass
 class MomentumSettings:
     enabled: bool = True
     breakout_lookback: int = 20
@@ -68,6 +99,7 @@ class MomentumSettings:
     cooldown_minutes: int = 30
     min_dte: int = 1
     target_delta: float = 0.40
+    profit_protection: ProfitProtectionSettings = field(default_factory=ProfitProtectionSettings)
 
 
 @dataclass
@@ -83,6 +115,7 @@ class OptionsFlowSettings:
     stop_pct: float = 0.01
     reward_risk: float = 2.0
     cooldown_minutes: int = 60
+    profit_protection: ProfitProtectionSettings = field(default_factory=ProfitProtectionSettings)
 
 
 @dataclass

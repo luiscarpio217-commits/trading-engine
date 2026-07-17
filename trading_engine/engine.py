@@ -219,7 +219,8 @@ class TradingEngine:
             return
 
         self._prime_paper_marks(signal, premium)
-        order = self.orders.execute_signal(signal, sizing.qty, premium)
+        order = self.orders.execute_signal(signal, sizing.qty, premium,
+                                           self._profit_protection_for(signal.strategy))
         if order is None:
             self.trade_log.set_signal_status(signal.id, "not_submitted")
             return
@@ -240,6 +241,13 @@ class TradingEngine:
         log.info("executed signal %s: qty %d, risk $%.2f (%.2f%% %s)%s", signal.id,
                  sizing.qty, sizing.risk_dollars, sizing.risk_pct * 100, sizing.method,
                  f" [{'; '.join(sizing.notes)}]" if sizing.notes else "")
+
+    def _profit_protection_for(self, strategy: str):
+        """The strategy's premium profit-protection settings (may be all-off)."""
+        return {
+            "momentum_breakout": self.config.strategies.momentum_breakout.profit_protection,
+            "options_flow": self.config.strategies.options_flow.profit_protection,
+        }.get(strategy)
 
     def _prime_paper_marks(self, signal: Signal, premium: Optional[float]) -> None:
         if not isinstance(self.broker, PaperBroker):

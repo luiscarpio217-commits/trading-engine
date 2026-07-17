@@ -117,6 +117,13 @@ rate-limited by a cooldown.
   resized as partial fills accrete; options are stop-managed engine-side
   (underlying stop + 50% premium stop). Everything is flattened at 15:55 ET
   by default — day trading, no overnight risk.
+- **Premium profit protection** (optional, per strategy, off by default):
+  `profit_protection.take_profit_pct` closes an option position at +N%
+  premium gain; `profit_protection.trailing` (`arm_pct`/`giveback_pct`)
+  arms once up N% and closes after a retrace off the peak mark. Whichever
+  triggers first wins; journal exit reasons `take_profit` and
+  `trailing_lock` keep the exit types analyzable. See the commented
+  examples in `config.example.yaml`.
 
 ## Brokers
 
@@ -164,7 +171,7 @@ trading_engine/
 ├── execution/               # paper / alpaca / tradier + order manager
 ├── storage/trade_log.py     # SQLite + CSV journal
 └── dashboard/               # rich terminal UI, FastAPI web UI
-tests/                       # 122 offline tests, synthetic data only
+tests/                       # 136 offline tests, synthetic data only
 ```
 
 Indicators are implemented natively on pandas/numpy (Wilder smoothing for

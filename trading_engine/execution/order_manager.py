@@ -7,6 +7,10 @@ Responsibilities:
     the currently filled quantity (re-placed as partials accrete),
   * monitor stops/targets engine-side (options have no reliable broker
     stops, and the engine-side check also backstops equity stops),
+  * premium-based profit protection for option positions: a fixed
+    take-profit (close at +N% premium gain) and/or a trailing lock (once
+    up arm%, close after a giveback% retrace off the peak mark) — both
+    optional, per strategy; whichever triggers first wins,
   * flatten everything on demand (end of day, daily-loss halt),
   * emit a TradeRecord via callback when a round trip completes.
 """
@@ -19,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Optional
 
-from ..config import ExecutionSettings, RiskSettings
+from ..config import ExecutionSettings, ProfitProtectionSettings, RiskSettings
 from ..models import (Direction, Instrument, Order, OrderSide, OrderStatus,
                       OrderType, Signal, TradeRecord, utcnow)
 from .base import Broker
@@ -42,6 +46,10 @@ class ManagedPosition:
     avg_entry: float = 0.0
     entry_time: datetime = field(default_factory=utcnow)
     premium_stop: Optional[float] = None   # options: close if mark <= this
+    take_profit_pct: Optional[float] = None  # options: close at +N% premium gain
+    trail_arm_pct: Optional[float] = None    # options: start trailing once up N%
+    trail_giveback_pct: Optional[float] = None  # then close on N% retrace off peak
+    peak_mark: float = 0.0                 # trailing high-water mark (0 = not armed)
     mark: float = 0.0                      # tradable mark
     underlying_mark: float = 0.0
     realized_pnl: float = 0.0
@@ -109,7 +117,9 @@ class OrderManager:
     # -- signal execution --------------------------------------------------
 
     def execute_signal(self, signal: Signal, qty: int,
-                       option_premium: Optional[float] = None) -> Optional[Order]:
+                       option_premium: Optional[float] = None,
+                       profit_protection: Optional[ProfitProtectionSettings] = None
+                       ) -> Optional[Order]:
         """Build and submit the entry order for a sized signal."""
         if qty <= 0:
             return None
@@ -163,6 +173,11 @@ class OrderManager:
                 entry_premium = option_premium or (signal.contract.mid if signal.contract else 0.0)
                 if entry_premium and entry_premium > 0:
                     position.premium_stop = entry_premium * (1.0 - self.risk_s.premium_stop_pct)
+                if profit_protection is not None:
+                    position.take_profit_pct = profit_protection.take_profit_pct
+                    if profit_protection.trailing.enabled:
+                        position.trail_arm_pct = profit_protection.trailing.arm_pct
+                        position.trail_giveback_pct = profit_protection.trailing.giveback_pct
             self._orders[order.id] = order
             self._seen_fill[order.id] = 0.0
             self.broker.submit_order(order)
@@ -336,9 +351,25 @@ class OrderManager:
                     pos.underlying_mark = underlying_marks[pos.underlying]
                 if pos.closing or pos.qty <= 0:
                     continue
+                self._update_trailing_peak(pos)
                 reason = self._exit_reason(pos)
                 if reason:
                     self.close_position(pos, reason)
+
+    def _update_trailing_peak(self, pos: ManagedPosition) -> None:
+        """Arm and ratchet the trailing high-water mark. Persists on the
+        position across manage cycles; a new high can never trigger its own
+        retrace (peak is updated before the exit check reads it)."""
+        if (pos.instrument is not Instrument.OPTION
+                or pos.trail_arm_pct is None or pos.trail_giveback_pct is None
+                or pos.avg_entry <= 0 or pos.mark <= 0):
+            return
+        if pos.peak_mark > 0:                       # armed: ratchet up only
+            pos.peak_mark = max(pos.peak_mark, pos.mark)
+        elif pos.mark >= pos.avg_entry * (1.0 + pos.trail_arm_pct / 100.0):
+            pos.peak_mark = pos.mark
+            log.info("trailing armed for %s: mark %.4f (entry %.4f, +%.0f%%)",
+                     pos.symbol, pos.mark, pos.avg_entry, pos.trail_arm_pct)
 
     def _exit_reason(self, pos: ManagedPosition) -> str:
         u = pos.underlying_mark
@@ -356,6 +387,17 @@ class OrderManager:
         if (pos.instrument is Instrument.OPTION and pos.premium_stop is not None
                 and 0 < pos.mark <= pos.premium_stop):
             return "premium_stop"
+        # premium-based profit protection (options only). Protective exits
+        # above always win the cycle; between these two, take-profit is
+        # checked first — if both are true in one snapshot the mark is at or
+        # beyond the take-profit level, so that label is the accurate one.
+        if pos.instrument is Instrument.OPTION and pos.mark > 0 and pos.avg_entry > 0:
+            if (pos.take_profit_pct is not None
+                    and pos.mark >= pos.avg_entry * (1.0 + pos.take_profit_pct / 100.0)):
+                return "take_profit"
+            if (pos.peak_mark > 0 and pos.trail_giveback_pct is not None
+                    and pos.mark <= pos.peak_mark * (1.0 - pos.trail_giveback_pct / 100.0)):
+                return "trailing_lock"
         return ""
 
     def close_position(self, pos: ManagedPosition, reason: str) -> Optional[Order]:
