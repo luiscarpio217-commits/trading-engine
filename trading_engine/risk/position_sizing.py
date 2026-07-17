@@ -9,9 +9,17 @@ many shares or contracts? The risk budget in dollars is
                       falls back to fixed fractional until `kelly_min_trades`
                       trades exist or when the edge is non-positive.
 
-Shares risk (entry - stop) per share. Long option contracts conservatively
-risk the full premium per contract (premium * 100). Both are additionally
-capped by `max_position_notional_pct` of equity.
+Shares risk (entry - stop) per share. Long option contracts risk the loss
+at the engine-enforced premium stop: premium * 100 * premium_stop_pct
+(default 50% - the order manager closes the position there), mirroring
+equity risk-to-stop sizing. Sizing against the full premium instead
+zeroed every contract whose premium exceeded budget/100 - on a ~$700
+underlying that was every normal near-the-money contract. Caps stay:
+min_option_premium, max_option_contracts, and max_position_notional_pct
+(applied to full premium notional).
+
+Every zero-size outcome carries a machine-readable `reason` so the signal
+status can show the exact gate (e.g. "sized_zero:risk_budget_lt_one_contract").
 """
 
 from __future__ import annotations
@@ -32,6 +40,7 @@ class SizingResult:
     method: str                  # fixed_fractional | kelly
     notional: float
     notes: list[str] = field(default_factory=list)
+    reason: str = ""             # machine-readable cause when qty == 0
 
     @property
     def viable(self) -> bool:
@@ -87,32 +96,63 @@ class PositionSizer:
                 premium = signal.contract.mid
             if premium is None or premium <= 0:
                 return SizingResult(0, risk_dollars, risk_pct, method, 0.0,
-                                    ["no usable option premium; cannot size"])
+                                    ["no usable option premium; cannot size"],
+                                    reason="no_premium")
             if premium < self.s.min_option_premium:
                 return SizingResult(0, risk_dollars, risk_pct, method, 0.0,
                                     [f"premium ${premium:.2f} below minimum "
                                      f"${self.s.min_option_premium:.2f}; cheap contracts "
-                                     f"produce oversized, untradeable quantities"])
-            per_contract_risk = premium * 100.0  # long option: full premium at risk
+                                     f"produce oversized, untradeable quantities"],
+                                    reason="premium_below_min")
+            # Risk per contract = loss at the engine-enforced premium stop
+            # (the order manager closes there), analogous to equity
+            # risk-to-stop. Clamped so a degenerate premium_stop_pct can
+            # neither zero the divisor nor exceed the full premium.
+            stop_fraction = min(max(self.s.premium_stop_pct, 0.10), 1.0)
+            per_contract_risk = premium * 100.0 * stop_fraction
+            per_contract_notional = premium * 100.0
+            trace = (f"premium ${premium:.2f}, at-stop risk "
+                     f"${per_contract_risk:.2f}/contract ({stop_fraction:.0%} premium stop), "
+                     f"budget ${risk_dollars:.2f}")
             qty = math.floor(risk_dollars / per_contract_risk)
-            qty = min(qty, math.floor(max_notional / per_contract_risk))
+            if qty <= 0:
+                return SizingResult(0, risk_dollars, risk_pct, method, 0.0,
+                                    [f"one contract risks more than the whole budget: {trace}"],
+                                    reason="risk_budget_lt_one_contract")
+            notional_qty = math.floor(max_notional / per_contract_notional)
+            if notional_qty <= 0:
+                return SizingResult(0, risk_dollars, risk_pct, method, 0.0,
+                                    [f"one contract exceeds the notional cap "
+                                     f"${max_notional:.2f}: {trace}"],
+                                    reason="notional_cap_lt_one_contract")
+            if qty > notional_qty:
+                notes.append(f"capped by notional (${max_notional:.0f}): {qty} -> {notional_qty}")
+                qty = notional_qty
             if qty > self.s.max_option_contracts:
                 notes.append(f"capped at max_option_contracts "
                              f"({self.s.max_option_contracts}, was {qty})")
                 qty = self.s.max_option_contracts
-            if qty <= 0:
-                notes.append(f"premium ${premium:.2f} exceeds risk budget ${risk_dollars:.2f}")
-            notional = max(qty, 0) * premium * 100.0
-            return SizingResult(max(qty, 0), risk_dollars, risk_pct, method, notional, notes)
+            notes.append(trace)
+            return SizingResult(qty, risk_dollars, risk_pct, method,
+                                qty * per_contract_notional, notes)
 
         per_share_risk = signal.risk_per_share
         if per_share_risk <= 0:
             return SizingResult(0, risk_dollars, risk_pct, method, 0.0,
-                                ["invalid stop: zero risk per share"])
+                                ["invalid stop: zero risk per share"],
+                                reason="invalid_stop")
         qty = math.floor(risk_dollars / per_share_risk)
-        if signal.entry_price > 0:
-            qty = min(qty, math.floor(max_notional / signal.entry_price))
         if qty <= 0:
-            notes.append("risk budget too small for one share within notional cap")
-        notional = qty * signal.entry_price
-        return SizingResult(max(qty, 0), risk_dollars, risk_pct, method, notional, notes)
+            return SizingResult(0, risk_dollars, risk_pct, method, 0.0,
+                                [f"one share risks ${per_share_risk:.2f}, over the "
+                                 f"${risk_dollars:.2f} budget"],
+                                reason="risk_budget_lt_one_share")
+        if signal.entry_price > 0:
+            notional_qty = math.floor(max_notional / signal.entry_price)
+            if notional_qty <= 0:
+                return SizingResult(0, risk_dollars, risk_pct, method, 0.0,
+                                    [f"one share exceeds the notional cap ${max_notional:.2f}"],
+                                    reason="notional_cap_lt_one_share")
+            qty = min(qty, notional_qty)
+        return SizingResult(qty, risk_dollars, risk_pct, method,
+                            qty * signal.entry_price, notes)

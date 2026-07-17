@@ -212,8 +212,10 @@ class TradingEngine:
                  if self.config.risk.sizing_method == "kelly" else None)
         sizing = self.sizer.size(signal, account.equity, premium, stats)
         if not sizing.viable:
-            self.trade_log.set_signal_status(signal.id, "sized_zero")
-            log.info("signal %s not executed: %s", signal.id, "; ".join(sizing.notes))
+            self.trade_log.set_signal_status(
+                signal.id, f"sized_zero:{sizing.reason or 'unknown'}")
+            log.info("signal %s sized to zero [%s]: %s", signal.id,
+                     sizing.reason or "unknown", "; ".join(sizing.notes))
             return
 
         self._prime_paper_marks(signal, premium)
@@ -235,8 +237,9 @@ class TradingEngine:
             )
         self.trade_log.set_signal_status(
             signal.id, f"executed:{sizing.qty}@{sizing.method}:{sizing.risk_pct:.3%}")
-        log.info("executed signal %s: qty %d, risk $%.2f (%.2f%% %s)", signal.id,
-                 sizing.qty, sizing.risk_dollars, sizing.risk_pct * 100, sizing.method)
+        log.info("executed signal %s: qty %d, risk $%.2f (%.2f%% %s)%s", signal.id,
+                 sizing.qty, sizing.risk_dollars, sizing.risk_pct * 100, sizing.method,
+                 f" [{'; '.join(sizing.notes)}]" if sizing.notes else "")
 
     def _prime_paper_marks(self, signal: Signal, premium: Optional[float]) -> None:
         if not isinstance(self.broker, PaperBroker):

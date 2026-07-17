@@ -173,6 +173,21 @@ class TestSizingCaps:
         assert len(positions) == 1
         assert positions[0].instrument is Instrument.EQUITY  # not 177 lottery tickets
 
+    def test_signal_status_carries_sized_zero_reason(self, tmp_path):
+        """Dashboard shows WHICH gate zeroed the size, per the live report."""
+        spot = float(make_breakout_df()["close"].iloc[-1])
+        chain = make_chain(spot=spot, asof=date(2026, 7, 14))
+        frame = chain.contracts
+        # make the picked contract genuinely over-budget: $25 premium means
+        # $1,250 at-stop risk against the $1,000 1% budget
+        picked = (frame["volume"] == 5000)
+        frame.loc[picked, ["bid", "ask", "last", "mid"]] = [24.9, 25.1, 25.0, 25.0]
+        engine, market, broker = make_engine(tmp_path, trade_options=True, chain=chain)
+        [sig] = engine.scan_once(now=TUESDAY_1030_ET)
+        assert engine.orders.open_positions() == []
+        status = engine.trade_log.recent_signals(1)[0]["status"]
+        assert status == "sized_zero:risk_budget_lt_one_contract"
+
     def test_options_flow_ignores_sub_dime_contracts(self):
         chain = make_chain(spot=100.0)
         frame = chain.contracts

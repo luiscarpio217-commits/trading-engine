@@ -98,12 +98,15 @@ rate-limited by a cooldown.
 ## Risk management
 
 - **Per-trade risk**: default 1% of equity (`max_risk_per_trade_pct`).
-  Equity size = budget / (entry − stop); option size = budget / (premium × 100)
-  — long options risk the full premium. Both capped by
-  `max_position_notional_pct`, and option orders additionally by
-  `min_option_premium` (default $0.10 — no sub-dime lottery tickets) and
-  `max_option_contracts` (default 25), so tiny premiums can never produce
-  enormous quantities.
+  Equity size = budget / (entry − stop); option size = budget /
+  (premium × 100 × `premium_stop_pct`) — risk is budgeted at the
+  engine-enforced premium stop (default 50%), mirroring equity
+  risk-to-stop sizing. Both capped by `max_position_notional_pct`
+  (full premium notional for options), plus `min_option_premium`
+  (default $0.10 — no sub-dime lottery tickets) and
+  `max_option_contracts` (default 25). Zero-size outcomes carry the
+  gate that caused them in the signal status
+  (`sized_zero:risk_budget_lt_one_contract`, `sized_zero:premium_below_min`, …).
 - **Kelly criterion** (optional, `sizing_method: kelly`): half-Kelly on
   realized win rate / payoff from the journal, hard-capped, with automatic
   fall-back to fixed fractional until ≥ 20 closed trades exist.
@@ -161,7 +164,7 @@ trading_engine/
 ├── execution/               # paper / alpaca / tradier + order manager
 ├── storage/trade_log.py     # SQLite + CSV journal
 └── dashboard/               # rich terminal UI, FastAPI web UI
-tests/                       # 112 offline tests, synthetic data only
+tests/                       # 122 offline tests, synthetic data only
 ```
 
 Indicators are implemented natively on pandas/numpy (Wilder smoothing for
