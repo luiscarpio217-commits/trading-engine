@@ -12,6 +12,8 @@ engine:
 
 execution:
   broker: paper            # paper only - no broker keys on this box
+  paper:
+    starting_cash: 500     # paper account capital (engine default is 100000)
 
 web:
   host: 0.0.0.0            # reachable from the internet -> auth is mandatory
