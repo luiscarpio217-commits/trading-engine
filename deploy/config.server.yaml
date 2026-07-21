@@ -16,3 +16,6 @@ execution:
 web:
   host: 0.0.0.0            # reachable from the internet -> auth is mandatory
   port: 8000
+
+edge2:
+  enabled: true            # EDGE2 discovery layer: paper trades tagged source='edge2'

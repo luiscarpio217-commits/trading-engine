@@ -95,6 +95,18 @@ weekdays), **minimum average daily volume** (default 1M shares), and an
 **earnings blackout** (default ±2 days). Signals per symbol/strategy are
 rate-limited by a cooldown.
 
+**EDGE2 discovery layer** (`trading_engine/edge2/`, `edge2.enabled` in
+config, off by default) — the EDGE2 gap/catalyst scanner ported as-is:
+$1–30 universe of movers, ≥5% gap with ≥1.5× volume, instrument filter,
+keyword-mode catalyst NLP (no torch/transformers), and post-flag outcome
+tracking. The first flag of the day per ticker opens a **paper** trade
+straight off EDGE2's own levels (entry/stop/target_2) through the normal
+risk/sizing/journaling path, tagged **`source='edge2'`**; IronFrost's own
+signals stay `source='ironfrost'`, and the journal and both dashboards
+split P&L / win rate / profit factor per source. EDGE2's tables live in
+the same `trading.db`; one scanner loop runs on the engine scheduler.
+EDGE2 trades are refused entirely on non-paper brokers.
+
 ## Risk management
 
 - **Per-trade risk**: default 1% of equity (`max_risk_per_trade_pct`).
@@ -167,11 +179,12 @@ trading_engine/
 │   ├── options_data.py      # normalized chains (yfinance / Tradier)
 │   └── indicators.py        # EMA, RSI, VWAP, BBands, ATR, MACD, RVOL, volume profile
 ├── strategies/              # momentum_breakout, options_flow
+├── edge2/                   # EDGE2 scanner port (discovery layer, paper-only)
 ├── risk/                    # position sizing (fixed/Kelly), daily-loss kill switch
 ├── execution/               # paper / alpaca / tradier + order manager
 ├── storage/trade_log.py     # SQLite + CSV journal
 └── dashboard/               # rich terminal UI, FastAPI web UI
-tests/                       # 136 offline tests, synthetic data only
+tests/                       # 150 offline tests, synthetic data only
 ```
 
 Indicators are implemented natively on pandas/numpy (Wilder smoothing for

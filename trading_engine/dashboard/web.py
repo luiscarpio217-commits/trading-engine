@@ -61,6 +61,9 @@ _PAGE = """<!DOCTYPE html>
 <h1>Day Trading Engine</h1>
 <div class="meta" id="meta">loading…</div>
 <div class="cards" id="cards"></div>
+<div id="sources-wrap" style="display:none">
+  <h2>Performance by Source</h2><table id="sources"></table>
+</div>
 <h2>Open Positions</h2><table id="positions"></table>
 <h2>Active Signals</h2><table id="signals"></table>
 <h2>Recent Trades</h2><table id="trades"></table>
@@ -96,6 +99,18 @@ async function refresh() {
       ["Trades", stats.total_trades ?? 0],
     ].map(([l, v]) => `<div class="card"><div class="label">${l}</div>` +
                       `<div class="value">${v}</div></div>`).join("");
+    const bySource = stats.by_source || {};
+    const srcNames = Object.keys(bySource).sort();
+    document.getElementById("sources-wrap").style.display = srcNames.length ? "" : "none";
+    if (srcNames.length) {
+      fillTable("sources",
+        ["Source", "Trades", "Win Rate", "P&L", "Avg Win", "Avg Loss", "Profit Factor"],
+        srcNames.map(n => { const b = bySource[n];
+          const pf = b.profit_factor === null ? "inf" : fmt(b.profit_factor);
+          return `<tr><td><b>${n}</b></td><td>${b.trades}</td>` +
+            `<td>${fmt((b.win_rate || 0) * 100, 1)}%</td>` + pnlCell(b.total_pnl) +
+            `<td>${fmt(b.avg_win)}</td><td>${fmt(b.avg_loss)}</td><td>${pf}</td></tr>`; }));
+    }
     fillTable("positions",
       ["Symbol", "Dir", "Strategy", "Qty", "Entry", "Mark", "Stop", "Target", "Unreal P&L"],
       (s.positions || []).map(p => `<tr><td>${p.symbol}</td>` +

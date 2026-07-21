@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS signals (
     expiry_recommendation TEXT,
     contract TEXT,
     reasons TEXT,
-    status TEXT DEFAULT 'generated'
+    status TEXT DEFAULT 'generated',
+    source TEXT NOT NULL DEFAULT 'ironfrost'
 );
 CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY,
@@ -41,7 +42,8 @@ CREATE TABLE IF NOT EXISTS orders (
     side TEXT, qty REAL, order_type TEXT,
     limit_price REAL, stop_price REAL,
     status TEXT, filled_qty REAL, avg_fill_price REAL,
-    broker_order_id TEXT, signal_id TEXT, note TEXT
+    broker_order_id TEXT, signal_id TEXT, note TEXT,
+    source TEXT NOT NULL DEFAULT 'ironfrost'
 );
 CREATE TABLE IF NOT EXISTS trades (
     id TEXT PRIMARY KEY,
@@ -54,7 +56,8 @@ CREATE TABLE IF NOT EXISTS trades (
     entry_price REAL, exit_price REAL,
     entry_time TEXT, exit_time TEXT,
     pnl REAL, pnl_pct REAL,
-    exit_reason TEXT, signal_id TEXT
+    exit_reason TEXT, signal_id TEXT,
+    source TEXT NOT NULL DEFAULT 'ironfrost'
 );
 CREATE TABLE IF NOT EXISTS equity_curve (
     ts TEXT PRIMARY KEY,
@@ -64,10 +67,10 @@ CREATE TABLE IF NOT EXISTS equity_curve (
 
 TRADE_CSV_FIELDS = ["id", "exit_time", "underlying", "symbol", "strategy", "direction",
                     "instrument", "qty", "multiplier", "entry_price", "exit_price",
-                    "pnl", "pnl_pct", "exit_reason", "entry_time", "signal_id"]
+                    "pnl", "pnl_pct", "exit_reason", "entry_time", "signal_id", "source"]
 SIGNAL_CSV_FIELDS = ["id", "created_at", "symbol", "strategy", "direction", "instrument",
                      "entry_price", "stop_loss", "target_price", "confidence",
-                     "expiry_recommendation", "contract", "status", "reasons"]
+                     "expiry_recommendation", "contract", "status", "reasons", "source"]
 
 
 def _iso(dt: Optional[datetime]) -> str:
@@ -86,6 +89,14 @@ class TradeLog:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # migration: pre-EDGE2 databases lack the source column; existing
+            # rows backfill to 'ironfrost' via the DEFAULT
+            for table in ("signals", "orders", "trades"):
+                cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+                if "source" not in cols:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN source TEXT NOT NULL "
+                        f"DEFAULT 'ironfrost'")
             self._conn.commit()
 
     def close(self) -> None:
@@ -100,10 +111,10 @@ class TradeLog:
                signal.direction.value, signal.instrument.value, signal.entry_price,
                signal.stop_loss, signal.target_price, signal.confidence,
                signal.expiry_recommendation, contract,
-               json.dumps(signal.reasons), status)
+               json.dumps(signal.reasons), status, signal.source)
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO signals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                "INSERT OR REPLACE INTO signals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
             self._conn.commit()
         self._append_csv("signals.csv", SIGNAL_CSV_FIELDS, {
             "id": signal.id, "created_at": _iso(signal.created_at),
@@ -113,7 +124,7 @@ class TradeLog:
             "target_price": signal.target_price, "confidence": signal.confidence,
             "expiry_recommendation": signal.expiry_recommendation,
             "contract": contract, "status": status,
-            "reasons": " | ".join(signal.reasons),
+            "reasons": " | ".join(signal.reasons), "source": signal.source,
         })
 
     def set_signal_status(self, signal_id: str, status: str) -> None:
@@ -126,10 +137,10 @@ class TradeLog:
                order.underlying, order.side.value, order.qty, order.order_type.value,
                order.limit_price, order.stop_price, order.status.value,
                order.filled_qty, order.avg_fill_price, order.broker_order_id,
-               order.signal_id, order.note)
+               order.signal_id, order.note, order.source)
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                "INSERT OR REPLACE INTO orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
             self._conn.commit()
 
     def log_trade(self, trade: TradeRecord) -> None:
@@ -137,10 +148,11 @@ class TradeLog:
                trade.direction.value, trade.instrument.value, trade.qty,
                trade.multiplier, trade.entry_price, trade.exit_price,
                _iso(trade.entry_time), _iso(trade.exit_time), trade.pnl,
-               round(trade.pnl_pct, 4), trade.exit_reason, trade.signal_id)
+               round(trade.pnl_pct, 4), trade.exit_reason, trade.signal_id,
+               trade.source)
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                "INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
             self._conn.commit()
         self._append_csv("trades.csv", TRADE_CSV_FIELDS, {
             "id": trade.id, "exit_time": _iso(trade.exit_time),
@@ -151,6 +163,7 @@ class TradeLog:
             "exit_price": trade.exit_price, "pnl": trade.pnl,
             "pnl_pct": round(trade.pnl_pct, 4), "exit_reason": trade.exit_reason,
             "entry_time": _iso(trade.entry_time), "signal_id": trade.signal_id,
+            "source": trade.source,
         })
 
     def log_equity(self, equity: float, cash: float, realized_day_pnl: float,
@@ -175,7 +188,7 @@ class TradeLog:
 
     def stats(self) -> dict:
         """Aggregate performance for the dashboard and Kelly sizing."""
-        trades = self._rows("SELECT pnl, strategy FROM trades")
+        trades = self._rows("SELECT pnl, strategy, source FROM trades")
         total = len(trades)
         wins = [t["pnl"] for t in trades if t["pnl"] > 0]
         losses = [-t["pnl"] for t in trades if t["pnl"] < 0]
@@ -187,6 +200,26 @@ class TradeLog:
             s["trades"] += 1
             s["wins"] += 1 if t["pnl"] > 0 else 0
             s["pnl"] += t["pnl"]
+        by_source: dict[str, dict] = {}
+        for t in trades:
+            src_key = t.get("source") or "ironfrost"
+            b = by_source.setdefault(src_key, {"trades": 0, "wins": 0, "losses": 0,
+                                               "gross_win": 0.0, "gross_loss": 0.0})
+            b["trades"] += 1
+            if t["pnl"] > 0:
+                b["wins"] += 1
+                b["gross_win"] += t["pnl"]
+            elif t["pnl"] < 0:
+                b["losses"] += 1
+                b["gross_loss"] += -t["pnl"]
+        for b in by_source.values():
+            b["total_pnl"] = round(b["gross_win"] - b["gross_loss"], 2)
+            b["win_rate"] = (b["wins"] / b["trades"]) if b["trades"] else 0.0
+            b["avg_win"] = (b["gross_win"] / b["wins"]) if b["wins"] else 0.0
+            b["avg_loss"] = (b["gross_loss"] / b["losses"]) if b["losses"] else 0.0
+            b["profit_factor"] = ((b["gross_win"] / b["gross_loss"])
+                                  if b["gross_loss"] > 0
+                                  else None if b["gross_win"] else 0.0)
         return {
             "total_trades": total,
             "wins": len(wins),
@@ -195,8 +228,10 @@ class TradeLog:
             "total_pnl": round(gross_win - gross_loss, 2),
             "avg_win": (gross_win / len(wins)) if wins else 0.0,
             "avg_loss": (gross_loss / len(losses)) if losses else 0.0,
-            "profit_factor": (gross_win / gross_loss) if gross_loss > 0 else float("inf") if gross_win else 0.0,
+            "profit_factor": ((gross_win / gross_loss) if gross_loss > 0
+                              else None if gross_win else 0.0),  # None = no losses yet (JSON-safe)
             "by_strategy": by_strategy,
+            "by_source": by_source,
         }
 
     def _rows(self, sql: str, params: tuple = ()) -> list[dict]:

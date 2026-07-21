@@ -108,7 +108,7 @@ def test_stop_out_records_trade_and_risk(tmp_path):
 
 def test_option_execution_path(tmp_path):
     spot = float(make_breakout_df()["close"].iloc[-1])
-    chain = make_chain(spot=spot, asof=date(2026, 7, 14))
+    chain = make_chain(spot=spot, asof=date.today())
     engine, market, broker = make_engine(tmp_path, trade_options=True, chain=chain)
     [sig] = engine.scan_once(now=TUESDAY_1030_ET)
     assert sig.contract is not None
@@ -128,7 +128,7 @@ def test_option_execution_path(tmp_path):
 
 def test_options_flow_signal_through_engine(tmp_path):
     spot = float(make_breakout_df()["close"].iloc[-1])
-    chain = make_chain(spot=spot, asof=date(2026, 7, 14))
+    chain = make_chain(spot=spot, asof=date.today())
     engine, market, broker = make_engine(tmp_path, trade_options=True, chain=chain,
                                          momentum=False, options_flow=True)
     signals = engine.scan_once(now=TUESDAY_1030_ET)

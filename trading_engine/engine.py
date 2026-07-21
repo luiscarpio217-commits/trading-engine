@@ -87,6 +87,8 @@ class TradingEngine:
         self._halt_flattened = False
         self._last_equity_log = 0.0
         self._scheduler = None
+        self._edge2_last_outcome_update = 0.0
+        self.edge2_bridge = self._init_edge2() if cfg.edge2.enabled else None
 
     # -- wiring helpers ------------------------------------------------------
 
@@ -107,6 +109,55 @@ class TradingEngine:
         return YFinanceOptionsData(cfg.data.max_chain_expiries,
                                    cfg.data.chain_cache_seconds,
                                    market_data=self.market_data)
+
+    def _init_edge2(self):
+        """Wire the EDGE2 scanner into this engine (one DB, one loop, paper only)."""
+        import sqlite3
+
+        from .edge2 import database as edge2_db
+        from .edge2 import outcome_tracker as edge2_outcomes
+        from .edge2 import scanner as edge2_scanner
+        from .edge2.bridge import Edge2Bridge
+
+        edge2_db.set_db_path(self.config.engine.db_path)  # one SQLite DB
+        edge2_db.init_db()
+        # outcome_tracker creates its table lazily; ensure it up front so the
+        # merged DB is complete from startup
+        with sqlite3.connect(self.config.engine.db_path) as conn:
+            conn.execute(edge2_outcomes.TABLE_SQL)
+        bridge = Edge2Bridge(self)
+        edge2_scanner.on_first_flag = bridge.open_paper_trade
+        log.info("edge2 discovery layer enabled: db=%s scan=%ss outcomes=%ss "
+                 "(paper trades tagged source='edge2')",
+                 self.config.engine.db_path,
+                 self.config.edge2.scan_interval_seconds,
+                 self.config.edge2.outcome_update_seconds)
+        return bridge
+
+    def edge2_cycle(self) -> None:
+        """One EDGE2 loop iteration: scan, then periodic outcome snapshots.
+
+        Mirrors the original EDGE2 main.scanner_loop() cadence; runs as a
+        single scheduler job (max_instances=1) so only one loop exists.
+        """
+        from .edge2 import database as edge2_db
+        from .edge2 import scanner as edge2_scanner
+        from .edge2.outcome_tracker import update_open_outcomes
+
+        try:
+            edge2_scanner.scan_universe()
+        except Exception:
+            log.exception("edge2 scan failed")
+        try:
+            if (_time.monotonic() - self._edge2_last_outcome_update
+                    >= self.config.edge2.outcome_update_seconds):
+                n = update_open_outcomes(edge2_db.DB_PATH,
+                                         edge2_scanner.get_live_price)
+                self._edge2_last_outcome_update = _time.monotonic()
+                if n:
+                    log.info("edge2 outcomes updated for %d open flag(s)", n)
+        except Exception:
+            log.exception("edge2 outcome update failed")
 
     def _on_trade_closed(self, record: TradeRecord) -> None:
         self.trade_log.log_trade(record)
@@ -424,6 +475,11 @@ class TradingEngine:
                           seconds=self.config.engine.manage_interval_seconds,
                           id="manage", coalesce=True, max_instances=1,
                           misfire_grace_time=30)
+        if self.edge2_bridge is not None:
+            scheduler.add_job(self.edge2_cycle, "interval",
+                              seconds=self.config.edge2.scan_interval_seconds,
+                              id="edge2_scan", coalesce=True, max_instances=1,
+                              misfire_grace_time=30)
         self._scheduler = scheduler
         log.info("engine starting: broker=%s tickers=%s scan=%ss manage=%ss",
                  self.broker.name, ",".join(self.config.engine.tickers),
