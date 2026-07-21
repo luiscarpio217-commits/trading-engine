@@ -150,16 +150,27 @@ class TestBridgeEndToEnd:
         assert trades[0]["pnl"] < 0
         assert engine.risk.realized_pnl_today() == pytest.approx(trades[0]["pnl"])
 
-    def test_paper_only_guard(self, tmp_path):
+    def test_paper_only_guard(self, tmp_path, caplog):
+        import logging
+
         engine, market = make_edge2_engine(tmp_path)
 
         class NotPaper:                            # stands in for a live adapter
             name = "alpaca"
         engine.broker = NotPaper()
-        result = engine.edge2_bridge.open_paper_trade(SAMPLE_TD)
+        with caplog.at_level(logging.WARNING, logger="trading_engine.edge2.bridge"):
+            result = engine.edge2_bridge.open_paper_trade(SAMPLE_TD)
         assert result is None
+        # the refusal must be logged, not silent
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING
+                    and "refusing to trade" in r.getMessage()]
+        assert len(warnings) == 1
+        assert "paper-only" in warnings[0].getMessage()
+        # ...and absolutely nothing must have happened
         assert engine.orders.open_positions() == []
+        assert engine.orders.open_orders() == []
         assert engine.trade_log.recent_signals(5) == []   # not even journaled
+        assert engine.trade_log.recent_trades(5) == []
 
     def test_bad_stop_skipped(self, tmp_path):
         engine, market = make_edge2_engine(tmp_path)
