@@ -205,6 +205,23 @@ class WebSettings:
 
 
 @dataclass
+class Edge2Settings:
+    """EDGE2 gap/catalyst scanner as a discovery layer (paper trades only).
+
+    When enabled, one scanner loop runs on the engine scheduler
+    (single worker): scan_universe() every scan_interval_seconds, EDGE2
+    outcome snapshots every outcome_update_seconds — the same cadence the
+    original EDGE2 main.py thread used. Tables live in the engine's own
+    SQLite DB. First flag of the day per ticker opens a paper trade tagged
+    source='edge2'.
+    """
+
+    enabled: bool = False
+    scan_interval_seconds: int = 60
+    outcome_update_seconds: int = 300
+
+
+@dataclass
 class Config:
     engine: EngineSettings = field(default_factory=EngineSettings)
     data: DataSettings = field(default_factory=DataSettings)
@@ -213,6 +230,7 @@ class Config:
     risk: RiskSettings = field(default_factory=RiskSettings)
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
     web: WebSettings = field(default_factory=WebSettings)
+    edge2: Edge2Settings = field(default_factory=Edge2Settings)
 
     @classmethod
     def load(cls, path: Optional[str | Path] = None) -> "Config":

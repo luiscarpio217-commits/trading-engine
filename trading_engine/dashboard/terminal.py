@@ -93,29 +93,47 @@ def _trades_table(status: dict) -> Table:
     return t
 
 
+def _fmt_pf(pf) -> str:
+    if pf is None or pf == float("inf"):
+        return "inf"     # no losses recorded yet
+    return f"{pf:.2f}"
+
+
 def _stats_panel(status: dict) -> Panel:
     s = status.get("stats", {})
-    pf = s.get("profit_factor", 0.0)
-    pf_str = "inf" if pf == float("inf") else f"{pf:.2f}"
-    body = Text.from_markup(
+    lines = [Text.from_markup(
         f"trades [bold]{s.get('total_trades', 0)}[/bold]   "
         f"win rate [bold]{s.get('win_rate', 0.0) * 100:.1f}%[/bold]   "
         f"total P&L {'[green]' if s.get('total_pnl', 0) >= 0 else '[red]'}"
         f"{s.get('total_pnl', 0.0):+,.2f}[/]   "
         f"avg win {s.get('avg_win', 0.0):,.2f}   avg loss {s.get('avg_loss', 0.0):,.2f}   "
-        f"profit factor {pf_str}"
-    )
-    return Panel(body, title="Performance", title_align="left", height=3)
+        f"profit factor {_fmt_pf(s.get('profit_factor', 0.0))}"
+    )]
+    by_source = s.get("by_source") or {}
+    if by_source:
+        parts = []
+        for name in sorted(by_source):
+            b = by_source[name]
+            pnl = b.get("total_pnl", 0.0)
+            parts.append(
+                f"[bold]{name}[/bold] {b.get('trades', 0)}t "
+                f"{b.get('win_rate', 0.0) * 100:.0f}%w "
+                f"{'[green]' if pnl >= 0 else '[red]'}{pnl:+,.2f}[/] "
+                f"PF {_fmt_pf(b.get('profit_factor', 0.0))}")
+        lines.append(Text.from_markup("by source:  " + "   |   ".join(parts)))
+    return Panel(Group(*lines), title="Performance", title_align="left",
+                 height=3 + (1 if by_source else 0))
 
 
 def render(status: dict) -> Layout:
+    has_sources = bool((status.get("stats") or {}).get("by_source"))
     layout = Layout()
     layout.split_column(
         Layout(_header(status), size=4),
         Layout(_positions_table(status), name="positions"),
         Layout(_signals_table(status), name="signals"),
         Layout(_trades_table(status), name="trades"),
-        Layout(_stats_panel(status), size=3),
+        Layout(_stats_panel(status), size=4 if has_sources else 3),
     )
     return layout
 

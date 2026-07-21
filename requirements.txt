@@ -6,6 +6,7 @@ requests>=2.31
 PyYAML>=6.0
 APScheduler>=3.10
 rich>=13.0
+pytz>=2024.1         # EDGE2 scanner session clock
 
 # Optional web dashboard
 fastapi>=0.110

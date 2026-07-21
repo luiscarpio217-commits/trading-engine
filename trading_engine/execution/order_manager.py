@@ -39,9 +39,10 @@ class ManagedPosition:
     direction: Direction         # thesis: LONG -> long shares / long calls
     strategy: str
     signal_id: str
-    multiplier: int
-    stop_loss: float             # on the underlying price
-    target: float                # on the underlying price
+    source: str = "ironfrost"
+    multiplier: int = 1
+    stop_loss: float = 0.0       # on the underlying price
+    target: float = 0.0          # on the underlying price
     qty: float = 0.0             # currently open quantity (positive)
     avg_entry: float = 0.0
     entry_time: datetime = field(default_factory=utcnow)
@@ -139,6 +140,7 @@ class OrderManager:
                 order_type=self._entry_order_type(),
                 limit_price=self._limit_for(premium, buying=True),
                 signal_id=signal.id,
+                source=signal.source,
                 note="entry",
             )
         else:
@@ -153,6 +155,7 @@ class OrderManager:
                 limit_price=self._limit_for(signal.entry_price,
                                             buying=signal.direction is Direction.LONG),
                 signal_id=signal.id,
+                source=signal.source,
                 note="entry",
             )
 
@@ -164,6 +167,7 @@ class OrderManager:
                 direction=signal.direction,
                 strategy=signal.strategy,
                 signal_id=signal.id,
+                source=signal.source,
                 multiplier=order.multiplier,
                 stop_loss=signal.stop_loss,
                 target=signal.target_price,
@@ -264,6 +268,7 @@ class OrderManager:
             instrument=pos.instrument,
             multiplier=pos.multiplier,
             signal_id=pos.signal_id,
+            source=pos.source,
             note="stop_loss",
         )
         self._orders[stop.id] = stop
@@ -326,6 +331,7 @@ class OrderManager:
             pnl=round(pos.realized_pnl, 2),
             exit_reason=pos.close_reason or close_order.note or "close",
             signal_id=pos.signal_id,
+            source=pos.source,
         )
         self._cancel_if_working(pos.stop_order_id)
         del self._positions[pos.symbol]
@@ -433,6 +439,7 @@ class OrderManager:
                 instrument=pos.instrument,
                 multiplier=pos.multiplier,
                 signal_id=pos.signal_id,
+                source=pos.source,
                 note=reason,
             )
             self._orders[order.id] = order

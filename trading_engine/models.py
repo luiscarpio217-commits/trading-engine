@@ -155,6 +155,7 @@ class Signal:
     expiry_recommendation: str = ""
     contract: Optional[OptionContract] = None
     reasons: list[str] = field(default_factory=list)
+    source: str = "ironfrost"     # signal origin: 'ironfrost' | 'edge2'
     created_at: datetime = field(default_factory=utcnow)
     id: str = field(default_factory=lambda: new_id("sig"))
 
@@ -191,6 +192,7 @@ class Order:
     broker_order_id: str = ""
     signal_id: str = ""
     note: str = ""                    # e.g. "entry", "stop_loss", "target", "flatten"
+    source: str = "ironfrost"         # carried from the originating signal
     submitted_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     id: str = field(default_factory=lambda: new_id("ord"))
@@ -257,6 +259,7 @@ class TradeRecord:
     pnl: float
     exit_reason: str
     signal_id: str = ""
+    source: str = "ironfrost"    # per-source P&L split: 'ironfrost' | 'edge2'
     id: str = field(default_factory=lambda: new_id("trd"))
 
     @property

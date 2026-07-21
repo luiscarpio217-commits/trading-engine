@@ -106,3 +106,15 @@ web:
   enabled: false                   # FastAPI dashboard alongside the engine loop
   host: 127.0.0.1
   port: 8000
+
+edge2:
+  enabled: false                   # EDGE2 gap/catalyst scanner discovery layer
+  scan_interval_seconds: 60        # scan_universe() cadence (single loop)
+  outcome_update_seconds: 300      # 30m/60m/peak flag-outcome snapshots
+  # When enabled: EDGE2 scans its ticker universe for gappers with volume and
+  # catalyst confirmation; the FIRST flag of the day per ticker opens a PAPER
+  # trade (source='edge2') through the normal risk/sizing/journaling path.
+  # IronFrost's own signals stay source='ironfrost'; the dashboards and
+  # journal split P&L / win rate / profit factor per source. EDGE2 tables
+  # (flagged_stocks, flag_outcomes) live inside the same trading.db.
+  # Catalyst NLP runs in keyword mode - no torch/transformers required.
