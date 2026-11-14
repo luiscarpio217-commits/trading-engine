@@ -15,6 +15,9 @@ engine:
 
 data:
   daily_lookback_days: 370   # ~252 trading days, for APEX's 52-week-high check
+  # Alpaca market data (free paper-account keys in /etc/trading-engine/env).
+  # Falls back to yfinance per call, and entirely if the keys are missing.
+  provider: alpaca
 
 execution:
   broker: paper            # paper only - no broker keys on this box

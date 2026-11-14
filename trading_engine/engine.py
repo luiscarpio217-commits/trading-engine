@@ -27,7 +27,7 @@ from .data.market_data import YFinanceMarketData
 from .data.options_data import TradierOptionsData, YFinanceOptionsData
 from .data.pricing import OptionMarkModel
 from .execution.base import Broker
-from .execution.order_manager import OrderManager
+from .execution.order_manager import OrderManager, sessions_held
 from .execution.paper import PaperBroker
 from .filters import SignalFilters
 from .models import Instrument, Order, Signal, TradeRecord, position_side_label
@@ -39,6 +39,35 @@ from .strategies import (InsiderBreakoutStrategy, MarketSnapshot, MomentumBreako
                          OptionsFlowStrategy, Strategy)
 
 log = logging.getLogger(__name__)
+
+
+def build_market_data(config: Config):
+    """Yahoo by default; Alpaca (with Yahoo as per-call fallback) when configured."""
+    d = config.data
+    yahoo = YFinanceMarketData(
+        intraday_cache_seconds=d.intraday_cache_seconds,
+        daily_cache_seconds=d.daily_cache_seconds,
+        quote_cache_seconds=d.quote_cache_seconds,
+    )
+    if d.provider.lower() != "alpaca":
+        return yahoo
+    creds = config.execution.alpaca
+    if not (creds.key_id and creds.secret):
+        log.warning("data.provider is alpaca but $%s / $%s are not set; using yfinance",
+                    creds.key_id_env, creds.secret_env)
+        return yahoo
+    from .data.alpaca_data import AlpacaMarketData
+    log.info("market data: alpaca (intraday=%s daily=%s quotes=%s), yfinance fallback",
+             d.alpaca_intraday_feed, d.alpaca_daily_feed, d.alpaca_quote_feed)
+    return AlpacaMarketData(
+        creds.key_id, creds.secret,
+        intraday_feed=d.alpaca_intraday_feed, daily_feed=d.alpaca_daily_feed,
+        quote_feed=d.alpaca_quote_feed, sip_delayed=d.alpaca_sip_delayed, fallback=yahoo,
+        intraday_cache_seconds=d.intraday_cache_seconds,
+        daily_cache_seconds=d.daily_cache_seconds,
+        quote_cache_seconds=d.quote_cache_seconds,
+        max_calls_per_minute=d.alpaca_max_calls_per_minute,
+    )
 
 
 def build_broker(config: Config) -> Broker:
@@ -63,11 +92,7 @@ class TradingEngine:
         self.config = config or Config()
         cfg = self.config
 
-        self.market_data = market_data or YFinanceMarketData(
-            intraday_cache_seconds=cfg.data.intraday_cache_seconds,
-            daily_cache_seconds=cfg.data.daily_cache_seconds,
-            quote_cache_seconds=cfg.data.quote_cache_seconds,
-        )
+        self.market_data = market_data or build_market_data(cfg)
         self.broker = broker or build_broker(cfg)
         self.options_data = options_data or self._build_options_data()
         self.filters = SignalFilters(
@@ -508,6 +533,7 @@ class TradingEngine:
         except Exception as exc:
             account_d = {"error": str(exc)}
         day = self.risk.day
+        today = self.filters.market_hours.session_date()
         positions = []
         for p in self.orders.open_positions():
             positions.append({
@@ -522,6 +548,8 @@ class TradingEngine:
                 "entry_time": p.entry_time.isoformat(),
                 "source": p.source,
                 "max_hold_days": p.max_hold_days,
+                "sessions_held": (sessions_held(p.entry_session or p.entry_time.date(), today)
+                                  if p.max_hold_days else None),
             })
         open_orders = [{
             "id": o.id, "symbol": o.symbol, "side": o.side.value,
@@ -550,8 +578,22 @@ class TradingEngine:
             "signals": self.trade_log.recent_signals(10),
             "trades": self.trade_log.recent_trades(10),
             "stats": self.trade_log.stats(),
-            "apex": self.apex_watchlist.status() if self.apex_watchlist is not None else None,
+            "apex": self._apex_status(today),
         }
+
+    def _apex_status(self, today) -> Optional[dict]:
+        if self.apex_watchlist is None:
+            return None
+        status = self.apex_watchlist.status()
+        status["live"] = [{
+            "ticker": e.ticker, "score": e.score, "insider_class": e.insider_class,
+            "cluster_size": e.cluster_size, "role_tier": e.role_tier,
+            "total_value_usd": e.total_value_usd,
+            "filed_date": e.filed_date.isoformat() if e.filed_date else None,
+            "expires_on": e.expires_on.isoformat() if e.expires_on else None,
+            "insiders": list(e.insiders),
+        } for e in self.apex_watchlist.entries(today)]
+        return status
 
     def run(self, blocking: bool = True):
         """Start the scheduler loop. Returns the scheduler when non-blocking."""

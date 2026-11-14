@@ -65,6 +65,10 @@ DASHBOARD_PASSWORD=
 PYTHONUNBUFFERED=1
 # Discord webhook for the Friday weekly P&L report (optional)
 DISCORD_WEBHOOK_URL=
+# Alpaca market data (free; paper-account keys work). Used when
+# data.provider is alpaca; never used to place orders while broker is paper.
+ALPACA_API_KEY_ID=
+ALPACA_API_SECRET_KEY=
 EOF
     chmod 600 "$ENV_FILE"
     echo "    created $ENV_FILE - set your username/password next (see deploy/README.md)"

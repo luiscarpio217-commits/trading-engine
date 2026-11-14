@@ -241,3 +241,22 @@ apex:
   target_pct: 0.12
 ```
 
+## Market data provider
+
+`data.provider: yfinance` (default) or `alpaca`. The Alpaca provider reads
+`ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` (free paper-account keys are
+enough) and uses, on the free plan:
+
+| data | feed | why |
+|---|---|---|
+| daily bars | `sip`, ending 16 min ago | full-market volume for liquidity and 52-week highs |
+| intraday bars | `iex`, real time | the free real-time feed (one exchange) |
+| latest price | `iex` last trade | same |
+
+Any Alpaca error, empty result, or stale IEX data during market hours (thin
+small caps can go minutes without an IEX print) falls back to yfinance for
+that call; missing keys fall back entirely. Earnings dates always come from
+yfinance. On Alpaca's paid plan set all three feeds to `sip` and
+`alpaca_sip_delayed: false`. EDGE2's own scanner still uses yfinance for its
+universe, news and prices.
+

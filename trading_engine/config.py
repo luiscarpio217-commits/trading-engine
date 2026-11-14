@@ -27,6 +27,15 @@ class EngineSettings:
 
 @dataclass
 class DataSettings:
+    # yfinance | alpaca. alpaca uses ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY
+    # (free paper keys work) and falls back to yfinance per call on errors,
+    # stale IEX data, or when the keys are missing. See data/alpaca_data.py.
+    provider: str = "yfinance"
+    alpaca_intraday_feed: str = "iex"
+    alpaca_daily_feed: str = "sip"
+    alpaca_quote_feed: str = "iex"
+    alpaca_sip_delayed: bool = True      # free plan: no SIP data from the last 15 minutes
+    alpaca_max_calls_per_minute: int = 180
     intraday_interval: str = "5m"
     intraday_lookback_days: int = 5
     daily_lookback_days: int = 120

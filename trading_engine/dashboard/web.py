@@ -65,6 +65,9 @@ _PAGE = """<!DOCTYPE html>
   <h2>Performance by Source</h2><table id="sources"></table>
 </div>
 <h2>Open Positions</h2><table id="positions"></table>
+<div id="apex-wrap" style="display:none">
+  <h2>APEX Watchlist <span class="meta" id="apex-meta"></span></h2><table id="apex"></table>
+</div>
 <h2>Active Signals</h2><table id="signals"></table>
 <h2>Recent Trades</h2><table id="trades"></table>
 <script>
@@ -112,17 +115,34 @@ async function refresh() {
             `<td>${fmt(b.avg_win)}</td><td>${fmt(b.avg_loss)}</td><td>${pf}</td></tr>`; }));
     }
     fillTable("positions",
-      ["Symbol", "Dir", "Strategy", "Qty", "Entry", "Mark", "Stop", "Target", "Unreal P&L"],
+      ["Symbol", "Dir", "Source", "Strategy", "Qty", "Entry", "Mark", "Stop", "Target",
+       "Held", "Unreal P&L"],
       (s.positions || []).map(p => `<tr><td>${p.symbol}</td>` +
         `<td>${p.side || sideLabel(p.instrument, p.direction)}</td>` +
+        `<td>${p.source || ""}</td>` +
         `<td>${p.strategy}</td><td>${p.qty}</td><td>${fmt(p.avg_entry)}</td>` +
         `<td>${fmt(p.mark)}</td><td>${fmt(p.stop_loss)}</td><td>${fmt(p.target)}</td>` +
+        `<td>${p.max_hold_days ? `day ${p.sessions_held} of ${p.max_hold_days}` : "today"}</td>` +
         pnlCell(p.unrealized_pnl) + "</tr>"));
+    const apex = s.apex;
+    document.getElementById("apex-wrap").style.display = apex ? "" : "none";
+    if (apex) {
+      document.getElementById("apex-meta").textContent = apex.generated_at
+        ? `updated ${new Date(apex.generated_at).toLocaleString()}` : "no file yet";
+      fillTable("apex",
+        ["Ticker", "Score", "Insider", "Role", "Cluster", "Buy $", "Filed", "Expires", "Who"],
+        (apex.live || []).map(e => `<tr><td><b>${e.ticker}</b></td><td>${fmt(e.score, 0)}</td>` +
+          `<td>${e.insider_class || ""}</td><td>${e.role_tier || ""}</td>` +
+          `<td>${e.cluster_size}</td><td>${fmt(e.total_value_usd, 0)}</td>` +
+          `<td>${e.filed_date || ""}</td><td>${e.expires_on || ""}</td>` +
+          `<td>${(e.insiders || []).join(", ")}</td></tr>`));
+    }
     fillTable("signals",
       ["Time", "Symbol", "Strategy", "Side", "Entry", "Stop", "Target", "Expiry", "Status"],
       (s.signals || []).map(x => `<tr><td>${(x.created_at || "").slice(11, 19)}</td>` +
         `<td>${x.symbol}</td><td>${x.strategy}</td>` +
-        `<td>${x.direction === "long" ? "call" : "put"}</td><td>${fmt(x.entry_price)}</td>` +
+        `<td>${x.instrument === "equity" ? x.direction
+              : (x.direction === "long" ? "call" : "put")}</td><td>${fmt(x.entry_price)}</td>` +
         `<td>${fmt(x.stop_loss)}</td><td>${fmt(x.target_price)}</td>` +
         `<td>${x.expiry_recommendation || ""}</td><td>${x.status}</td></tr>`));
     fillTable("trades",
