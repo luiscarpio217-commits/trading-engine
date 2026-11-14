@@ -187,8 +187,9 @@ def cmd_weekly_report(args) -> int:
     if args.post:
         url = os.environ.get(args.webhook_env, "")
         if not url:
-            print(f"--post: ${args.webhook_env} is not set; nothing sent", file=sys.stderr)
-            return 1
+            # not an error: Discord is optional (the timer still runs harmlessly)
+            print(f"--post: ${args.webhook_env} is not set; nothing sent")
+            return 0
         import requests
         resp = requests.post(url, json={"content": text[:1900]}, timeout=15)
         if resp.status_code >= 300:
