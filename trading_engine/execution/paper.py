@@ -97,6 +97,27 @@ class PaperBroker(Broker):
                 if not order.status.is_terminal:
                     self._try_fill(order)
 
+    # -- persistence ------------------------------------------------------------
+
+    def export_state(self) -> dict:
+        with self._lock:
+            return {
+                "cash": self._cash,
+                "positions": [vars(p).copy() for p in self._positions.values() if p.qty != 0],
+                "marks": dict(self._marks),
+            }
+
+    def import_state(self, state: dict) -> None:
+        """Restore cash, positions and marks. Resting orders are not restored;
+        the order manager re-places protective stops for restored positions."""
+        with self._lock:
+            self._cash = float(state.get("cash", self._cash))
+            self._positions = {}
+            for row in state.get("positions", []):
+                pos = BrokerPosition(**row)
+                self._positions[pos.symbol] = pos
+            self._marks.update({k: float(v) for k, v in state.get("marks", {}).items()})
+
     # -- fill engine ------------------------------------------------------------
 
     def _try_fill(self, order: Order) -> None:

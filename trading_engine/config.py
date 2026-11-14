@@ -19,6 +19,10 @@ class EngineSettings:
     db_path: str = "data/trading.db"
     csv_dir: str = "data"
     log_level: str = "INFO"
+    # Where open positions and the paper account are saved after every manage
+    # cycle and restored on startup, so multi-day holds survive a restart.
+    # Empty = off (paper account resets to starting_cash on every start).
+    state_path: str = ""
 
 
 @dataclass
@@ -222,6 +226,38 @@ class Edge2Settings:
 
 
 @dataclass
+class ApexSettings:
+    """APEX insider-buy watchlist -> short-term equity paper trades.
+
+    APEX (separate repo) rewrites `watchlist_path` with stocks that had a
+    recent high-scoring insider buy. When enabled, every scan checks those
+    stocks with the insider_breakout strategy: buy when the price trades above
+    the prior day's high (not more than max_chase_pct above it), the stock is
+    within near_high_pct of its 52-week high, and it trades at least
+    min_avg_dollar_volume a day. Positions are held up to max_hold_days
+    trading sessions with a fixed % stop and target - the same rules
+    scripts/backtest.py in APEX tests. Paper only, like EDGE2.
+    """
+
+    enabled: bool = False
+    watchlist_path: str = "/opt/apex/data/watchlist.json"
+    min_score: float = 50.0
+    max_symbols: int = 30
+    stale_after_minutes: int = 180      # warn when APEX stops updating the file
+    max_hold_days: int = 5
+    stop_pct: float = 0.06
+    target_pct: float = 0.12
+    max_chase_pct: float = 0.03
+    near_high_pct: Optional[float] = 0.10   # None turns the 52-week-high check off
+    high_lookback_days: int = 252
+    min_daily_bars: int = 60
+    min_price: float = 1.0
+    max_price: float = 50.0
+    min_avg_dollar_volume: float = 200_000.0
+    cooldown_minutes: int = 390         # one attempt per stock per day
+
+
+@dataclass
 class Config:
     engine: EngineSettings = field(default_factory=EngineSettings)
     data: DataSettings = field(default_factory=DataSettings)
@@ -231,6 +267,7 @@ class Config:
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
     web: WebSettings = field(default_factory=WebSettings)
     edge2: Edge2Settings = field(default_factory=Edge2Settings)
+    apex: ApexSettings = field(default_factory=ApexSettings)
 
     @classmethod
     def load(cls, path: Optional[str | Path] = None) -> "Config":

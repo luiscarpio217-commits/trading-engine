@@ -5,6 +5,7 @@
     trading-engine dashboard [--config ...]
     trading-engine web [--config ...]
     trading-engine report [--config ...]
+    trading-engine weekly-report [--config ...] [--days 7] [--post]
 """
 
 from __future__ import annotations
@@ -129,6 +130,73 @@ def cmd_report(args) -> int:
     return 0
 
 
+def weekly_summary(trades: list[dict], days: int, now=None) -> dict:
+    """P&L per source (ironfrost / edge2 / apex) for trades closed in the window."""
+    from datetime import datetime, timedelta, timezone
+
+    now = now or datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+    by_source: dict[str, dict] = {}
+    for t in trades:
+        try:
+            closed = datetime.fromisoformat(str(t["exit_time"]))
+        except (KeyError, ValueError):
+            continue
+        if closed.tzinfo is None:
+            closed = closed.replace(tzinfo=timezone.utc)
+        if closed < since:
+            continue
+        src = t.get("source") or "ironfrost"
+        b = by_source.setdefault(src, {"trades": 0, "wins": 0, "pnl": 0.0,
+                                       "best": None, "worst": None})
+        pnl = float(t.get("pnl") or 0.0)
+        b["trades"] += 1
+        b["wins"] += 1 if pnl > 0 else 0
+        b["pnl"] += pnl
+        label = f"{t.get('underlying') or t.get('symbol')} {pnl:+.2f}"
+        if b["best"] is None or pnl > b["best"][0]:
+            b["best"] = (pnl, label)
+        if b["worst"] is None or pnl < b["worst"][0]:
+            b["worst"] = (pnl, label)
+    total = sum(b["pnl"] for b in by_source.values())
+    return {"since": since.isoformat(), "days": days, "total_pnl": round(total, 2),
+            "by_source": by_source}
+
+
+def format_weekly(summary: dict) -> str:
+    lines = [f"Paper trading, last {summary['days']} days: total {summary['total_pnl']:+.2f}"]
+    if not summary["by_source"]:
+        lines.append("no closed trades")
+    for src, b in sorted(summary["by_source"].items()):
+        rate = b["wins"] / b["trades"] if b["trades"] else 0.0
+        lines.append(f"- {src}: {b['trades']} trades, {rate:.0%} winners, {b['pnl']:+.2f}"
+                     + (f" (best {b['best'][1]}, worst {b['worst'][1]})" if b["best"] else ""))
+    return "\n".join(lines)
+
+
+def cmd_weekly_report(args) -> int:
+    import os
+
+    config = _load(args)
+    from .storage.trade_log import TradeLog
+    tlog = TradeLog(config.engine.db_path, None)
+    trades = tlog._rows("SELECT * FROM trades ORDER BY exit_time")
+    tlog.close()
+    text = format_weekly(weekly_summary(trades, args.days))
+    print(text)
+    if args.post:
+        url = os.environ.get(args.webhook_env, "")
+        if not url:
+            print(f"--post: ${args.webhook_env} is not set; nothing sent", file=sys.stderr)
+            return 1
+        import requests
+        resp = requests.post(url, json={"content": text[:1900]}, timeout=15)
+        if resp.status_code >= 300:
+            print(f"discord post failed: HTTP {resp.status_code}", file=sys.stderr)
+            return 1
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="trading-engine",
                                      description="Day trading strategy engine")
@@ -156,6 +224,14 @@ def main(argv=None) -> int:
     p_report = sub.add_parser("report", help="print performance stats from the trade log")
     p_report.add_argument("--limit", type=int, default=20)
     p_report.set_defaults(func=cmd_report)
+
+    p_week = sub.add_parser("weekly-report",
+                            help="P&L by source (ironfrost/edge2/apex) for the last N days")
+    p_week.add_argument("--days", type=int, default=7)
+    p_week.add_argument("--post", action="store_true",
+                        help="also post to the Discord webhook in $DISCORD_WEBHOOK_URL")
+    p_week.add_argument("--webhook-env", default="DISCORD_WEBHOOK_URL")
+    p_week.set_defaults(func=cmd_weekly_report)
 
     args = parser.parse_args(argv)
     return args.func(args)

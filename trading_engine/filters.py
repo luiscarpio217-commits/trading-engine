@@ -76,6 +76,25 @@ class VolumeFilter:
         return bool(avg >= self._min)
 
 
+class DollarVolumeFilter:
+    """Reject names trading less than N dollars a day (20-day average of close x volume).
+
+    Small caps trade far fewer shares than large caps at the same dollar
+    liquidity, so the APEX path uses this instead of the share-count floor.
+    """
+
+    def __init__(self, min_avg_dollar_volume: float, lookback: int = 20) -> None:
+        self._min = min_avg_dollar_volume
+        self._lookback = lookback
+
+    def passes(self, daily_df: pd.DataFrame) -> bool:
+        if daily_df is None or daily_df.empty or not {"close", "volume"} <= set(daily_df.columns):
+            return False
+        tail = daily_df.tail(self._lookback)
+        avg = (tail["close"] * tail["volume"]).mean()
+        return bool(avg >= self._min)
+
+
 class EarningsFilter:
     """Block new trades within +/- `blackout_days` of an earnings date.
 
@@ -117,9 +136,17 @@ class SignalFilters:
         return True, ""
 
     def check_symbol(self, symbol: str, daily_df: pd.DataFrame,
-                     today: Optional[date] = None) -> tuple[bool, str]:
-        if not self.volume.passes(daily_df):
-            return False, f"below minimum average daily volume ({self._settings.min_avg_daily_volume:,.0f})"
+                     today: Optional[date] = None,
+                     min_volume: Optional[float] = None,
+                     min_dollar_volume: Optional[float] = None) -> tuple[bool, str]:
+        """min_volume / min_dollar_volume override the configured share floor
+        for one call (the APEX path passes min_volume=0 plus a dollar floor)."""
+        volume = self.volume if min_volume is None else VolumeFilter(min_volume)
+        floor = self._settings.min_avg_daily_volume if min_volume is None else min_volume
+        if not volume.passes(daily_df):
+            return False, f"below minimum average daily volume ({floor:,.0f})"
+        if min_dollar_volume and not DollarVolumeFilter(min_dollar_volume).passes(daily_df):
+            return False, f"below minimum average dollar volume (${min_dollar_volume:,.0f})"
         if not self.earnings.passes(symbol, today):
             return False, f"within {self._settings.earnings_blackout_days}d earnings blackout"
         return True, ""

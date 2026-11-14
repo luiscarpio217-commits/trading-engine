@@ -3,7 +3,13 @@
 Two scheduled jobs drive the system:
   * scan    (default 60s): evaluate strategies per ticker, size and place entries
   * manage  (default 10s): refresh marks, absorb fills, enforce stops/targets,
-                           EOD flatten, daily-loss auto-shutoff
+                           EOD flatten (day trades), time stops (multi-day
+                           APEX trades), daily-loss auto-shutoff
+
+With apex.enabled, each scan also checks the APEX insider-buy watchlist with
+the insider_breakout strategy (equity, held up to apex.max_hold_days). With
+engine.state_path set, open positions and the paper account are saved after
+every manage pass and restored at startup.
 
 Both respect the RiskManager kill switch and the market-hours filter.
 """
@@ -27,8 +33,10 @@ from .filters import SignalFilters
 from .models import Instrument, Order, Signal, TradeRecord, position_side_label
 from .risk.manager import RiskManager
 from .risk.position_sizing import PositionSizer
+from .storage.state import load_state, save_state
 from .storage.trade_log import TradeLog
-from .strategies import MarketSnapshot, MomentumBreakoutStrategy, OptionsFlowStrategy, Strategy
+from .strategies import (InsiderBreakoutStrategy, MarketSnapshot, MomentumBreakoutStrategy,
+                         OptionsFlowStrategy, Strategy)
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +97,24 @@ class TradingEngine:
         self._scheduler = None
         self._edge2_last_outcome_update = 0.0
         self.edge2_bridge = self._init_edge2() if cfg.edge2.enabled else None
+
+        self.apex_watchlist = None
+        self.apex_strategy = None
+        if cfg.apex.enabled:
+            from .apex.watchlist import ApexWatchlist
+            self.apex_watchlist = ApexWatchlist(cfg.apex.watchlist_path, cfg.apex.min_score,
+                                                cfg.apex.max_symbols,
+                                                cfg.apex.stale_after_minutes)
+            self.apex_strategy = InsiderBreakoutStrategy(cfg.apex)
+            log.info("apex watchlist enabled: %s (min score %.0f, hold <= %d sessions)",
+                     cfg.apex.watchlist_path, cfg.apex.min_score, cfg.apex.max_hold_days)
+
+        self._state_path = cfg.engine.state_path or ""
+        if self._state_path:
+            try:
+                load_state(self._state_path, self.broker, self.orders)
+            except Exception:
+                log.exception("could not restore state from %s", self._state_path)
 
     # -- wiring helpers ------------------------------------------------------
 
@@ -184,7 +210,54 @@ class TradingEngine:
                 signals.extend(self._scan_symbol(symbol, now, execute))
             except Exception:
                 log.exception("scan failed for %s", symbol)
+        if self.apex_watchlist is not None:
+            signals.extend(self._scan_apex(now, execute))
         return signals
+
+    def _scan_apex(self, now: datetime, execute: bool) -> list[Signal]:
+        """Check each live APEX watchlist stock with insider_breakout only."""
+        cfg = self.config
+        today = self.filters.market_hours.session_date(now)
+        out: list[Signal] = []
+        for entry in self.apex_watchlist.entries(today, now):
+            symbol = entry.ticker
+            try:
+                if self._in_cooldown(symbol, InsiderBreakoutStrategy.name, now):
+                    continue
+                if self.orders.has_open_exposure(symbol):
+                    continue
+                daily = self.market_data.get_daily(symbol, cfg.data.daily_lookback_days)
+                ok, reason = self.filters.check_symbol(
+                    symbol, daily, today, min_volume=0,
+                    min_dollar_volume=cfg.apex.min_avg_dollar_volume)
+                if not ok:
+                    log.debug("apex %s filtered: %s", symbol, reason)
+                    continue
+                intraday = self.market_data.get_intraday(
+                    symbol, cfg.data.intraday_interval, cfg.data.intraday_lookback_days)
+                if intraday.empty:
+                    continue
+                snapshot = MarketSnapshot(symbol=symbol, intraday=intraday, daily=daily, now=now)
+                signal = self.apex_strategy.evaluate(snapshot, entry)
+                if signal is None:
+                    continue
+                self._set_cooldown(symbol, InsiderBreakoutStrategy.name, now)
+                self.trade_log.log_signal(signal)
+                log.info("apex signal: %s entry %.2f stop %.2f target %.2f (score %.0f)",
+                         symbol, signal.entry_price, signal.stop_loss, signal.target_price,
+                         entry.score)
+                out.append(signal)
+                if execute:
+                    if not isinstance(self.broker, PaperBroker):
+                        log.warning("apex: broker is %s, not paper - not trading %s "
+                                    "(APEX trades are paper-only for now)",
+                                    self.broker.name, symbol)
+                        self.trade_log.set_signal_status(signal.id, "skipped:not_paper")
+                        continue
+                    self._execute_signal(signal, now)
+            except Exception:
+                log.exception("apex scan failed for %s", symbol)
+        return out
 
     def _scan_symbol(self, symbol: str, now: datetime, execute: bool) -> list[Signal]:
         cfg = self.config
@@ -231,12 +304,13 @@ class TradingEngine:
         minutes = {
             "momentum_breakout": self.config.strategies.momentum_breakout.cooldown_minutes,
             "options_flow": self.config.strategies.options_flow.cooldown_minutes,
+            "insider_breakout": self.config.apex.cooldown_minutes,
         }.get(strategy, 30)
         self._cooldowns[(symbol, strategy)] = now + timedelta(minutes=minutes)
 
     # -- execution path ------------------------------------------------------------
 
-    def _execute_signal(self, signal: Signal) -> None:
+    def _execute_signal(self, signal: Signal, now: Optional[datetime] = None) -> None:
         if self.orders.has_open_exposure(signal.symbol):
             self.trade_log.set_signal_status(signal.id, "skipped:existing_exposure")
             return
@@ -270,8 +344,10 @@ class TradingEngine:
             return
 
         self._prime_paper_marks(signal, premium)
+        session = self.filters.market_hours.session_date(now or signal.created_at)
         order = self.orders.execute_signal(signal, sizing.qty, premium,
-                                           self._profit_protection_for(signal.strategy))
+                                           self._profit_protection_for(signal.strategy),
+                                           session_date=session)
         if order is None:
             self.trade_log.set_signal_status(signal.id, "not_submitted")
             return
@@ -334,13 +410,18 @@ class TradingEngine:
         self.orders.poll()
         self.orders.manage(underlying_marks, tradable_marks)
 
-        if (self.config.filters.eod_flatten
-                and self.filters.market_hours.is_flatten_window(now)):
+        if self.filters.market_hours.is_flatten_window(now):
             session = self.filters.market_hours.session_date(now)
-            if self._flattened_session != session and self.orders.open_positions():
-                log.info("end-of-day flatten (%s)", self.config.filters.eod_flatten_time)
-                self.orders.flatten_all("eod_flatten")
-            self._flattened_session = session
+            if self._flattened_session != session:
+                if self.config.filters.eod_flatten and self.orders.open_positions():
+                    log.info("end-of-day flatten (%s)", self.config.filters.eod_flatten_time)
+                    # multi-day positions ride overnight; their exit is the time stop
+                    self.orders.flatten_all("eod_flatten", include_swing=False)
+                due = self.orders.close_due_swings(session, "time_stop")
+                if due:
+                    log.info("time stop: closed %d multi-day position(s) on their last session",
+                             due)
+                self._flattened_session = session
 
         try:
             account = self.broker.get_account()
@@ -357,6 +438,15 @@ class TradingEngine:
             self.trade_log.log_equity(account.equity, account.cash,
                                       self.risk.realized_pnl_today(), self.risk.halted)
             self._last_equity_log = _time.monotonic()
+        self._save_state()
+
+    def _save_state(self) -> None:
+        if not self._state_path:
+            return
+        try:
+            save_state(self._state_path, self.broker, self.orders)
+        except Exception:
+            log.exception("could not save state to %s", self._state_path)
 
     def _ensure_session(self, now: datetime) -> None:
         session = self.filters.market_hours.session_date(now)
@@ -430,6 +520,8 @@ class TradingEngine:
                 "stop_loss": p.stop_loss, "target": p.target,
                 "unrealized_pnl": round(p.unrealized_pnl, 2),
                 "entry_time": p.entry_time.isoformat(),
+                "source": p.source,
+                "max_hold_days": p.max_hold_days,
             })
         open_orders = [{
             "id": o.id, "symbol": o.symbol, "side": o.side.value,
@@ -458,6 +550,7 @@ class TradingEngine:
             "signals": self.trade_log.recent_signals(10),
             "trades": self.trade_log.recent_trades(10),
             "stats": self.trade_log.stats(),
+            "apex": self.apex_watchlist.status() if self.apex_watchlist is not None else None,
         }
 
     def run(self, blocking: bool = True):
@@ -501,4 +594,5 @@ class TradingEngine:
                 self._scheduler.shutdown(wait=False)
             except Exception:
                 pass
+        self._save_state()
         self.trade_log.close()

@@ -155,7 +155,11 @@ class Signal:
     expiry_recommendation: str = ""
     contract: Optional[OptionContract] = None
     reasons: list[str] = field(default_factory=list)
-    source: str = "ironfrost"     # signal origin: 'ironfrost' | 'edge2'
+    source: str = "ironfrost"     # signal origin: 'ironfrost' | 'edge2' | 'apex'
+    # None = day trade (closed at the end-of-day flatten). N = equity swing
+    # trade held overnight and closed at the flatten time on its Nth trading
+    # session (entry day = 1) unless the stop or target hits first.
+    max_hold_days: Optional[int] = None
     created_at: datetime = field(default_factory=utcnow)
     id: str = field(default_factory=lambda: new_id("sig"))
 
@@ -259,7 +263,7 @@ class TradeRecord:
     pnl: float
     exit_reason: str
     signal_id: str = ""
-    source: str = "ironfrost"    # per-source P&L split: 'ironfrost' | 'edge2'
+    source: str = "ironfrost"    # per-source P&L split: 'ironfrost' | 'edge2' | 'apex'
     id: str = field(default_factory=lambda: new_id("trd"))
 
     @property

@@ -1,0 +1,10 @@
+# Fridays 16:20 America/New_York (after the close).
+[Unit]
+Description=Weekly trading engine P&L report
+
+[Timer]
+OnCalendar=Fri *-*-* 16:20:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

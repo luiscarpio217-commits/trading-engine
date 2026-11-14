@@ -9,6 +9,12 @@ engine:
   db_path: /opt/trading-engine/data/trading.db
   csv_dir: /opt/trading-engine/data
   log_level: INFO
+  # open positions + paper account survive restarts (needed for multi-day
+  # APEX holds). Delete this file to reset the paper account.
+  state_path: /opt/trading-engine/data/state.json
+
+data:
+  daily_lookback_days: 370   # ~252 trading days, for APEX's 52-week-high check
 
 execution:
   broker: paper            # paper only - no broker keys on this box
@@ -21,3 +27,12 @@ web:
 
 edge2:
   enabled: true            # EDGE2 discovery layer: paper trades tagged source='edge2'
+
+apex:
+  enabled: true            # APEX insider-buy watchlist: paper trades tagged source='apex'
+  watchlist_path: /opt/apex/data/watchlist.json
+  min_score: 50
+  max_hold_days: 5         # set from the APEX backtest's best hold length
+  stop_pct: 0.06
+  target_pct: 0.12
+  min_avg_dollar_volume: 200000

@@ -202,3 +202,42 @@ both strategies, filters, sizing math, the daily-loss shutoff, paper-broker
 fills (market/limit/stop, partial fills), the order manager's stop
 management, the SQLite/CSV journal, and an end-to-end
 signal → order → stop-out engine pass.
+
+## APEX insider-buy trades (multi-day, paper only)
+
+[APEX](https://github.com/luiscarpio217-commits/apex) watches SEC Form 4
+filings, scores insider purchases, and rewrites a watchlist file after every
+poll. With `apex.enabled: true` the engine checks those stocks each scan with
+the `insider_breakout` strategy:
+
+* buy shares when the price trades above the prior day's high (at most
+  `max_chase_pct` above it), the stock is within `near_high_pct` of its
+  52-week high, and it trades `min_avg_dollar_volume`+ a day,
+* fixed stop (`stop_pct`) and target (`target_pct`),
+* held overnight up to `max_hold_days` sessions; the end-of-day flatten skips
+  these positions and a `time_stop` closes them at the flatten time of their
+  last session,
+* tagged `source='apex'` in the journal, so `report` / `weekly-report` and the
+  dashboard split APEX from IronFrost and EDGE2.
+
+These are the same rules APEX's `scripts/backtest.py` measures, so paper
+results can be compared with the backtest. Set `engine.state_path` so open
+positions and the paper account survive restarts (`deploy/config.server.yaml`
+does). `trading-engine weekly-report --post` sends the last 7 days' P&L by
+source to `$DISCORD_WEBHOOK_URL`; `deploy/setup.sh` installs a Friday timer
+for it.
+
+```yaml
+engine:
+  state_path: /opt/trading-engine/data/state.json
+data:
+  daily_lookback_days: 370
+apex:
+  enabled: true
+  watchlist_path: /opt/apex/data/watchlist.json
+  min_score: 50
+  max_hold_days: 5
+  stop_pct: 0.06
+  target_pct: 0.12
+```
+

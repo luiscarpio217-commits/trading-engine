@@ -11,7 +11,10 @@ Responsibilities:
     take-profit (close at +N% premium gain) and/or a trailing lock (once
     up arm%, close after a giveback% retrace off the peak mark) — both
     optional, per strategy; whichever triggers first wins,
-  * flatten everything on demand (end of day, daily-loss halt),
+  * flatten everything on demand (end of day, daily-loss halt); multi-day
+    equity positions (signal.max_hold_days) skip the end-of-day flatten and
+    are closed by close_due_swings() on their last trading session,
+  * export/import open positions so a restart doesn't drop them,
   * emit a TradeRecord via callback when a round trip completes.
 """
 
@@ -20,7 +23,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Callable, Optional
 
 from ..config import ExecutionSettings, ProfitProtectionSettings, RiskSettings
@@ -60,6 +63,12 @@ class ManagedPosition:
     stop_order_id: str = ""
     closing: bool = False
     close_reason: str = ""
+    max_hold_days: Optional[int] = None    # None = day trade; N = swing, N sessions
+    entry_session: Optional[date] = None   # exchange-local session date of entry
+
+    @property
+    def is_swing(self) -> bool:
+        return self.max_hold_days is not None and self.max_hold_days > 0
 
     @property
     def unrealized_pnl(self) -> float:
@@ -119,9 +128,14 @@ class OrderManager:
 
     def execute_signal(self, signal: Signal, qty: int,
                        option_premium: Optional[float] = None,
-                       profit_protection: Optional[ProfitProtectionSettings] = None
+                       profit_protection: Optional[ProfitProtectionSettings] = None,
+                       session_date: Optional[date] = None,
                        ) -> Optional[Order]:
-        """Build and submit the entry order for a sized signal."""
+        """Build and submit the entry order for a sized signal.
+
+        session_date: exchange-local trading day of the entry, used to count
+        how many sessions a multi-day position has been held.
+        """
         if qty <= 0:
             return None
         use_option = (signal.instrument is Instrument.OPTION
@@ -172,6 +186,10 @@ class OrderManager:
                 stop_loss=signal.stop_loss,
                 target=signal.target_price,
                 entry_order_id=order.id,
+                # multi-day holds are equity-only; options stay day trades
+                max_hold_days=(signal.max_hold_days
+                               if order.instrument is Instrument.EQUITY else None),
+                entry_session=session_date,
             )
             if order.instrument is Instrument.OPTION:
                 entry_premium = option_premium or (signal.contract.mid if signal.contract else 0.0)
@@ -459,17 +477,89 @@ class OrderManager:
             self._absorb_fills(order)
             return order
 
-    def flatten_all(self, reason: str) -> None:
+    def flatten_all(self, reason: str, include_swing: bool = True) -> None:
+        """Close everything. include_swing=False (end of day) leaves multi-day
+        positions and their entry orders alone."""
         with self._lock:
             for order in list(self._orders.values()):
                 if not order.status.is_terminal and order.note == "entry":
+                    pos = self._positions.get(order.symbol)
+                    if not include_swing and pos is not None and pos.is_swing:
+                        continue
                     try:
                         self.broker.cancel_order(order)
                     except Exception:
                         pass
             for pos in list(self._positions.values()):
-                if not pos.closing:
+                if pos.closing:
+                    continue
+                if not include_swing and pos.is_swing:
+                    continue
+                self.close_position(pos, reason)
+
+    def close_due_swings(self, session: date, reason: str = "time_stop") -> int:
+        """Close multi-day positions on (or past) their last session. Returns count."""
+        closed = 0
+        with self._lock:
+            for pos in list(self._positions.values()):
+                if not pos.is_swing or pos.closing or pos.qty <= 0:
+                    continue
+                start = pos.entry_session or pos.entry_time.date()
+                if sessions_held(start, session) >= (pos.max_hold_days or 0):
                     self.close_position(pos, reason)
+                    closed += 1
+        return closed
+
+    # -- persistence -----------------------------------------------------------
+
+    _STATE_FIELDS = ("symbol", "underlying", "strategy", "signal_id", "source", "multiplier",
+                     "stop_loss", "target", "qty", "avg_entry", "premium_stop",
+                     "take_profit_pct", "trail_arm_pct", "trail_giveback_pct", "peak_mark",
+                     "mark", "underlying_mark", "realized_pnl", "closed_qty", "closed_value",
+                     "max_hold_days")
+
+    def export_state(self) -> list[dict]:
+        """Open (filled) positions as plain dicts for storage/state.py."""
+        with self._lock:
+            out = []
+            for pos in self._positions.values():
+                if pos.qty <= 0:
+                    continue
+                row = {k: getattr(pos, k) for k in self._STATE_FIELDS}
+                row["instrument"] = pos.instrument.value
+                row["direction"] = pos.direction.value
+                row["entry_time"] = pos.entry_time.isoformat()
+                row["entry_session"] = (pos.entry_session.isoformat()
+                                        if pos.entry_session else None)
+                out.append(row)
+            return out
+
+    def import_state(self, rows: list[dict]) -> int:
+        """Restore positions saved by export_state(). Equity positions get a
+        fresh protective stop at the broker. Returns positions restored."""
+        restored = 0
+        with self._lock:
+            for row in rows:
+                try:
+                    pos = ManagedPosition(
+                        **{k: row[k] for k in self._STATE_FIELDS if k in row},
+                        instrument=Instrument(row["instrument"]),
+                        direction=Direction(row["direction"]),
+                        entry_time=datetime.fromisoformat(row["entry_time"]),
+                        entry_session=(date.fromisoformat(row["entry_session"])
+                                       if row.get("entry_session") else None),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    log.warning("state: skipped unreadable position %s (%s)",
+                                row.get("symbol"), exc)
+                    continue
+                if pos.symbol in self._positions or pos.qty <= 0:
+                    continue
+                self._positions[pos.symbol] = pos
+                if pos.instrument is Instrument.EQUITY:
+                    self._ensure_stop_order(pos)
+                restored += 1
+        return restored
 
     # -- helpers -------------------------------------------------------------------
 
@@ -492,3 +582,20 @@ class OrderManager:
 
 def _entry_done(order: Optional[Order]) -> bool:
     return order is None or order.status.is_terminal
+
+
+def sessions_held(entry_session: date, session: date) -> int:
+    """Trading sessions from entry to `session`, both counted (entry day = 1).
+
+    Weekdays only; exchange holidays are not modeled (same as the market-
+    hours filter), so a holiday inside the hold counts as a session.
+    """
+    if session < entry_session:
+        return 0
+    days = 0
+    d = entry_session
+    while d <= session:
+        if d.weekday() < 5:
+            days += 1
+        d += timedelta(days=1)
+    return days

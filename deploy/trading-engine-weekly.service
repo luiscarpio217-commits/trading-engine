@@ -1,0 +1,19 @@
+# Weekly paper-trading summary (P&L by source) posted to Discord.
+# Installed by deploy/setup.sh; triggered by trading-engine-weekly.timer.
+# Put DISCORD_WEBHOOK_URL=... in /etc/trading-engine/env.
+
+[Unit]
+Description=Trading engine weekly P&L report
+
+[Service]
+Type=oneshot
+User=trading
+Group=trading
+WorkingDirectory=/opt/trading-engine
+EnvironmentFile=/etc/trading-engine/env
+ExecStart=/opt/trading-engine/.venv/bin/python -m trading_engine --config /opt/trading-engine/config.yaml weekly-report --post
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trading-engine/data

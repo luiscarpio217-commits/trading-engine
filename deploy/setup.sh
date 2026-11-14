@@ -63,6 +63,8 @@ if [[ ! -f "$ENV_FILE" ]]; then
 DASHBOARD_USERNAME=
 DASHBOARD_PASSWORD=
 PYTHONUNBUFFERED=1
+# Discord webhook for the Friday weekly P&L report (optional)
+DISCORD_WEBHOOK_URL=
 EOF
     chmod 600 "$ENV_FILE"
     echo "    created $ENV_FILE - set your username/password next (see deploy/README.md)"
@@ -72,8 +74,11 @@ fi
 
 echo "==> installing and enabling the systemd service"
 cp deploy/trading-engine.service "/etc/systemd/system/$SERVICE.service"
+cp deploy/trading-engine-weekly.service "/etc/systemd/system/$SERVICE-weekly.service"
+cp deploy/trading-engine-weekly.timer "/etc/systemd/system/$SERVICE-weekly.timer"
 systemctl daemon-reload
 systemctl enable "$SERVICE"
+systemctl enable --now "$SERVICE-weekly.timer"
 
 echo
 echo "Setup complete. Next steps (see deploy/README.md):"
